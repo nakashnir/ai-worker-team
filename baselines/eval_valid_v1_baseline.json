@@ -3,8 +3,8 @@
   "version": "a8-v2",
   "updated_at": "2026-03-16",
   "task_type": "eval.run",
-  "dataset_path": "shared/datasets/sample_eval_valid_v1.jsonl",
-  "model": "anthropic:claude-sonnet-4-5-20250929",
+  "dataset_path": "datasets/sample_eval_valid_v1.jsonl",
+  "model": "stub.echo_expected",
   "scorers": [
     "exact_match",
     "contains_expected",

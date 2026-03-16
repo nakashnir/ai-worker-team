@@ -13,6 +13,49 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Resolve compose command
+        shell: bash
+        run: |
+          if command -v docker-compose >/dev/null 2>&1; then
+            echo "COMPOSE_CMD=docker-compose" >> "${GITHUB_ENV}"
+          else
+            echo "COMPOSE_CMD=docker compose" >> "${GITHUB_ENV}"
+          fi
+
+      - name: Write CI .env
+        shell: bash
+        run: |
+          cat > .env <<'EOF'
+          POSTGRES_USER=postgres
+          POSTGRES_PASSWORD=postgres
+          POSTGRES_DB=ai_workers
+          ANTHROPIC_API_KEY=
+          OPENAI_API_KEY=
+          DEFAULT_ANTHROPIC_MODEL=claude-sonnet-4-5-20250929
+          EOF
+
+      - name: Ensure datasets directory
+        run: mkdir -p shared/datasets
+
+      - name: Start stack
+        shell: bash
+        run: |
+          ${COMPOSE_CMD} up -d
+
+      - name: Wait for orchestrator health
+        shell: bash
+        run: |
+          for i in {1..120}; do
+            code="$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8080/health || true)"
+            if [[ "${code}" == "200" ]]; then
+              echo "orchestrator is healthy"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "orchestrator did not become healthy in time" >&2
+          exit 1
+
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
@@ -22,3 +65,19 @@ jobs:
         run: |
           chmod +x scripts/run_nightly_local.sh
           ./scripts/run_nightly_local.sh
+
+      - name: Upload nightly artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-eval-artifacts
+          if-no-files-found: warn
+          path: |
+            shared/reports/**
+            shared/runs/**
+
+      - name: Tear down stack
+        if: always()
+        shell: bash
+        run: |
+          ${COMPOSE_CMD} down -v
