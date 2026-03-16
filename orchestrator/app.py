@@ -1,0 +1,559 @@
+"""
+orchestrator/app.py  v1.7.0
+Ticket A7 — Read API improvements: filters, pagination, richer responses.
+
+New / extended endpoints
+────────────────────────
+GET /eval/runs
+    limit      int  default 20, max 100
+    offset     int  default 0
+    status     str  optional  exact match  (done|failed|running|queued)
+    model      str  optional  exact match
+    provider   str  optional  substring in metrics->>'provider'
+    passed     bool optional  metrics->>'passed' == 'true'/'false'
+    since      str  optional  ISO8601 → completed_at >= since
+    until      str  optional  ISO8601 → completed_at <= until
+    sort       str  default created_at  (created_at|completed_at)
+    order      str  default desc        (asc|desc)
+    → { runs:[...], count:int, total:int, limit:int, offset:int }
+
+GET /eval/run/{task_id}
+    → same fields as before + report_path, results_path from run.json
+
+GET /eval/run/{task_id}/samples
+    limit      int  default 20, max 500
+    offset     int  default 0
+    sample_id  str  optional  exact match on sample_id column
+    q          str  optional  substring search in prompt, expected, output
+    → { samples:[...], count:int, total:int, limit:int, offset:int }
+
+All existing fields kept unchanged (backward compatible).
+Safe parameterized SQL throughout — no string interpolation of user input.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import sys
+import uuid
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
+import psycopg2
+import psycopg2.extras
+import redis as redis_lib
+from fastapi import FastAPI, HTTPException, Query
+from pydantic import BaseModel, Field
+
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from schemas.task_protocol import (
+    Task, TaskResult, TaskStatus,
+    result_from_json,
+)
+
+REDIS_URL  = os.environ.get("REDIS_URL", "redis://redis:6379/0")
+TASK_QUEUE = "tasks:queue"
+
+_PG_DSN = (
+    f"host={os.environ.get('POSTGRES_HOST', 'postgres')} "
+    f"port={os.environ.get('POSTGRES_PORT', '5432')} "
+    f"dbname={os.environ.get('POSTGRES_DB', '')} "
+    f"user={os.environ.get('POSTGRES_USER', '')} "
+    f"password={os.environ.get('POSTGRES_PASSWORD', '')}"
+)
+
+SHARED_DIR = Path(os.environ.get("SHARED_DIR", "/app/shared"))
+
+
+# ─────────────────────────────────────────────────────────────────
+# Connection helpers
+# ─────────────────────────────────────────────────────────────────
+
+def get_redis() -> redis_lib.Redis:
+    return redis_lib.from_url(REDIS_URL, decode_responses=True)
+
+
+def _get_db_conn():
+    """Open a fresh psycopg2 connection. Caller must close."""
+    return psycopg2.connect(_PG_DSN, cursor_factory=psycopg2.extras.RealDictCursor)
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+# ─────────────────────────────────────────────────────────────────
+# Pydantic response models
+# ─────────────────────────────────────────────────────────────────
+
+class EvalRunRow(BaseModel):
+    task_id:       str
+    dataset_path:  str
+    model:         str
+    scorers:       List[str]
+    status:        str
+    metrics:       Optional[Dict[str, Any]] = None
+    created_at:    Optional[str]            = None
+    completed_at:  Optional[str]            = None
+    # Augmented fields (from run.json, present only on GET /eval/run/{id})
+    report_path:   Optional[str]            = None
+    results_path:  Optional[str]            = None
+
+
+class EvalRunsResponse(BaseModel):
+    runs:   List[EvalRunRow]
+    count:  int   = Field(description="Number of rows in this page")
+    total:  int   = Field(description="Total matching rows (before pagination)")
+    limit:  int
+    offset: int
+
+
+class EvalSampleRow(BaseModel):
+    task_id:    str
+    sample_id:  str
+    prompt:     str
+    expected:   Optional[str] = None
+    output:     str
+    scores:     Optional[Dict[str, Any]] = None
+
+
+class EvalSamplesResponse(BaseModel):
+    task_id:  str
+    samples:  List[EvalSampleRow]
+    count:    int   = Field(description="Number of rows in this page")
+    total:    int   = Field(description="Total matching rows (before pagination)")
+    limit:    int
+    offset:   int
+
+
+# ─────────────────────────────────────────────────────────────────
+# DB coercion helpers
+# ─────────────────────────────────────────────────────────────────
+
+def _coerce_run_row(row: Any) -> dict:
+    """Convert RealDictRow → plain JSON-serialisable dict for EvalRunRow."""
+    d = dict(row)
+    for col in ("scorers", "metrics"):
+        if isinstance(d.get(col), str):
+            d[col] = json.loads(d[col])
+    for col in ("created_at", "completed_at"):
+        v = d.get(col)
+        if v is not None and hasattr(v, "isoformat"):
+            d[col] = v.isoformat()
+    return d
+
+
+def _coerce_sample_row(row: Any) -> dict:
+    d = dict(row)
+    if isinstance(d.get("scores"), str):
+        d["scores"] = json.loads(d["scores"])
+    return d
+
+
+def _artifact_paths(task_id: str) -> dict:
+    """
+    Read shared/runs/{task_id}/run.json and extract artifact paths from summary.
+    Returns {report_path: str|None, results_path: str|None}.
+    Never raises.
+    """
+    run_json = SHARED_DIR / "runs" / task_id / "run.json"
+    try:
+        data    = json.loads(run_json.read_text(encoding="utf-8"))
+        summary = data.get("summary") or {}
+        return {
+            "report_path":  summary.get("report_path"),
+            "results_path": summary.get("results_path"),
+        }
+    except Exception:
+        return {"report_path": None, "results_path": None}
+
+
+# ─────────────────────────────────────────────────────────────────
+# Query builders  (safe parameterized SQL — zero string interpolation)
+# ─────────────────────────────────────────────────────────────────
+
+_ALLOWED_SORT   = {"created_at", "completed_at"}
+_ALLOWED_ORDER  = {"asc", "desc"}
+_ALLOWED_STATUS = {"done", "failed", "running", "queued"}
+
+
+def _build_runs_query(
+    *,
+    status:   str | None,
+    model:    str | None,
+    provider: str | None,
+    passed:   bool | None,
+    since:    str | None,
+    until:    str | None,
+    sort:     str,
+    order:    str,
+    limit:    int,
+    offset:   int,
+) -> tuple[str, str, list]:
+    """
+    Return (data_sql, count_sql, params_list).
+    sort and order are validated against allowlists before being interpolated
+    into the ORDER BY clause — they are never derived from raw user input
+    without validation.
+    """
+    # Validate sort/order against allowlists (safe: not derived from raw input)
+    sort_col = sort  if sort  in _ALLOWED_SORT  else "created_at"
+    ord_dir  = order if order in _ALLOWED_ORDER else "desc"
+
+    where_clauses: list[str] = []
+    params:        list      = []
+
+    if status:
+        where_clauses.append("status = %s")
+        params.append(status)
+
+    if model:
+        where_clauses.append("model = %s")
+        params.append(model)
+
+    if provider:
+        where_clauses.append("metrics->>'provider' ILIKE %s")
+        params.append(f"%{provider}%")
+
+    if passed is not None:
+        where_clauses.append("(metrics->>'passed')::boolean = %s")
+        params.append(passed)
+
+    if since:
+        where_clauses.append("COALESCE(completed_at, created_at) >= %s::timestamptz")
+        params.append(since)
+
+    if until:
+        where_clauses.append("COALESCE(completed_at, created_at) <= %s::timestamptz")
+        params.append(until)
+
+    where_sql = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
+
+    # ORDER BY uses validated allowlisted identifiers — not raw user input
+    data_sql = f"""
+        SELECT task_id, dataset_path, model, scorers, status, metrics,
+               created_at, completed_at
+        FROM   eval_runs
+        {where_sql}
+        ORDER  BY COALESCE({sort_col}, created_at) {ord_dir}
+        LIMIT  %s OFFSET %s
+    """
+    count_sql = f"SELECT COUNT(*) FROM eval_runs {where_sql}"
+
+    # data query appends limit + offset to params copy
+    data_params  = list(params) + [limit, offset]
+    count_params = list(params)
+
+    return data_sql, count_sql, data_params, count_params
+
+
+def _build_samples_query(
+    *,
+    task_id:   str,
+    sample_id: str | None,
+    q:         str | None,
+    limit:     int,
+    offset:    int,
+) -> tuple[str, str, list, list]:
+    """
+    Return (data_sql, count_sql, data_params, count_params).
+    All user-supplied strings go through %s parameters — never interpolated.
+    """
+    where_clauses: list[str] = ["task_id = %s"]
+    params:        list      = [task_id]
+
+    if sample_id:
+        where_clauses.append("sample_id = %s")
+        params.append(sample_id)
+
+    if q:
+        # Substring search across prompt, expected, output
+        where_clauses.append(
+            "(prompt ILIKE %s OR expected ILIKE %s OR output ILIKE %s)"
+        )
+        like = f"%{q}%"
+        params.extend([like, like, like])
+
+    where_sql = "WHERE " + " AND ".join(where_clauses)
+
+    data_sql = f"""
+        SELECT task_id, sample_id, prompt, expected, output, scores
+        FROM   eval_samples
+        {where_sql}
+        ORDER  BY sample_id
+        LIMIT  %s OFFSET %s
+    """
+    count_sql = f"SELECT COUNT(*) FROM eval_samples {where_sql}"
+
+    data_params  = list(params) + [limit, offset]
+    count_params = list(params)
+
+    return data_sql, count_sql, data_params, count_params
+
+
+# ─────────────────────────────────────────────────────────────────
+# DB execution helpers
+# ─────────────────────────────────────────────────────────────────
+
+def _exec_query(sql: str, params: list) -> list[dict]:
+    conn = _get_db_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(sql, params)
+            return [dict(r) for r in cur.fetchall()]
+    finally:
+        conn.close()
+
+
+def _exec_count(sql: str, params: list) -> int:
+    conn = _get_db_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(sql, params)
+            row = cur.fetchone()
+            return int(row["count"]) if row else 0
+    finally:
+        conn.close()
+
+
+def _check_run_exists(task_id: str) -> bool:
+    conn = _get_db_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT 1 FROM eval_runs WHERE task_id = %s", (task_id,))
+            return cur.fetchone() is not None
+    finally:
+        conn.close()
+
+
+# ─────────────────────────────────────────────────────────────────
+# FastAPI app
+# ─────────────────────────────────────────────────────────────────
+
+app = FastAPI(
+    title       = "AI Worker Orchestrator",
+    version     = "1.7.0",
+    description = "Orchestrator for AI eval tasks. Ticket A7 adds rich read API.",
+)
+
+
+# ─────────────────────────────────────────────────────────────────
+# Existing endpoints (unchanged)
+# ─────────────────────────────────────────────────────────────────
+
+@app.get("/health", tags=["meta"])
+def health():
+    return {"status": "ok"}
+
+
+@app.get("/", tags=["meta"])
+def root():
+    return {"service": "orchestrator", "version": "1.7.0"}
+
+
+@app.get("/schemas", tags=["meta"])
+def get_schemas():
+    return {
+        "task_schema":        Task.model_json_schema(),
+        "task_result_schema": TaskResult.model_json_schema(),
+    }
+
+
+class SubmitRequest(BaseModel):
+    description: str
+    task_type:   str             = "research.stub"
+    inputs:      Dict[str, Any]  = Field(default_factory=dict)
+    task_id:     Optional[str]   = None
+
+
+@app.post("/task/submit", status_code=202, tags=["tasks"])
+def submit_task(req: SubmitRequest):
+    task = Task(
+        task_id     = req.task_id or str(uuid.uuid4()),
+        description = req.description,
+        task_type   = req.task_type,
+        inputs      = req.inputs,
+        created_at  = _now_iso(),
+        status      = TaskStatus.queued,
+    )
+    get_redis().lpush(TASK_QUEUE, task.model_dump_json())
+    return {
+        "task_id":   task.task_id,
+        "status":    task.status,
+        "task_type": task.task_type,
+    }
+
+
+@app.get("/task/status/{task_id}", tags=["tasks"])
+def task_status(task_id: str):
+    raw = get_redis().get(f"tasks:result:{task_id}")
+    if raw is None:
+        return TaskResult(task_id=task_id, status=TaskStatus.queued)
+    return result_from_json(raw)
+
+
+# ─────────────────────────────────────────────────────────────────
+# A7 — GET /eval/runs
+# ─────────────────────────────────────────────────────────────────
+
+@app.get(
+    "/eval/runs",
+    response_model = EvalRunsResponse,
+    tags           = ["eval"],
+    summary        = "List eval runs with filters and pagination",
+)
+def list_eval_runs(
+    limit:    int           = Query(default=20,    ge=1, le=100,
+                                    description="Max rows to return (1–100)"),
+    offset:   int           = Query(default=0,     ge=0,
+                                    description="Row offset for pagination"),
+    status:   Optional[str] = Query(default=None,
+                                    description="Exact status filter: done|failed|running|queued"),
+    model:    Optional[str] = Query(default=None,
+                                    description="Exact model string filter"),
+    provider: Optional[str] = Query(default=None,
+                                    description="Substring match in metrics.provider"),
+    passed:   Optional[bool]= Query(default=None,
+                                    description="Filter by metrics.passed true/false"),
+    since:    Optional[str] = Query(default=None,
+                                    description="ISO8601 lower bound on completed_at (or created_at)"),
+    until:    Optional[str] = Query(default=None,
+                                    description="ISO8601 upper bound on completed_at (or created_at)"),
+    sort:     str           = Query(default="created_at",
+                                    description="Sort column: created_at|completed_at"),
+    order:    str           = Query(default="desc",
+                                    description="Sort direction: asc|desc"),
+):
+    # Validate status against allowlist (give a helpful error, not a 500)
+    if status and status not in _ALLOWED_STATUS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Invalid status {status!r}. Allowed: {sorted(_ALLOWED_STATUS)}",
+        )
+
+    data_sql, count_sql, data_params, count_params = _build_runs_query(
+        status   = status,
+        model    = model,
+        provider = provider,
+        passed   = passed,
+        since    = since,
+        until    = until,
+        sort     = sort,
+        order    = order,
+        limit    = limit,
+        offset   = offset,
+    )
+
+    try:
+        raw_rows = _exec_query(data_sql, data_params)
+        total    = _exec_count(count_sql, count_params)
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"Database error: {exc}")
+
+    runs = [EvalRunRow(**_coerce_run_row(r)) for r in raw_rows]
+    return EvalRunsResponse(
+        runs   = runs,
+        count  = len(runs),
+        total  = total,
+        limit  = limit,
+        offset = offset,
+    )
+
+
+# ─────────────────────────────────────────────────────────────────
+# A7 — GET /eval/run/{task_id}
+# ─────────────────────────────────────────────────────────────────
+
+@app.get(
+    "/eval/run/{task_id}",
+    response_model = EvalRunRow,
+    tags           = ["eval"],
+    summary        = "Get a single eval run by task_id (includes artifact paths)",
+)
+def get_eval_run(task_id: str):
+    sql = """
+        SELECT task_id, dataset_path, model, scorers, status, metrics,
+               created_at, completed_at
+        FROM   eval_runs
+        WHERE  task_id = %s
+    """
+    try:
+        rows = _exec_query(sql, [task_id])
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"Database error: {exc}")
+
+    if not rows:
+        raise HTTPException(status_code=404, detail=f"eval run {task_id!r} not found")
+
+    d = _coerce_run_row(rows[0])
+    d.update(_artifact_paths(task_id))
+    return EvalRunRow(**d)
+
+
+# ─────────────────────────────────────────────────────────────────
+# A7 — GET /eval/run/{task_id}/samples
+# ─────────────────────────────────────────────────────────────────
+
+@app.get(
+    "/eval/run/{task_id}/samples",
+    response_model = EvalSamplesResponse,
+    tags           = ["eval"],
+    summary        = "List samples for an eval run with pagination and search",
+)
+def get_eval_samples(
+    task_id:   str,
+    limit:     int           = Query(default=20,  ge=1,  le=500,
+                                     description="Max rows to return (1–500)"),
+    offset:    int           = Query(default=0,   ge=0,
+                                     description="Row offset for pagination"),
+    sample_id: Optional[str] = Query(default=None,
+                                     description="Exact sample_id filter"),
+    q:         Optional[str] = Query(default=None,
+                                     description="Substring search in prompt / expected / output"),
+):
+    # 404 if parent run does not exist
+    try:
+        if not _check_run_exists(task_id):
+            raise HTTPException(
+                status_code=404,
+                detail=f"eval run {task_id!r} not found",
+            )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"Database error: {exc}")
+
+    data_sql, count_sql, data_params, count_params = _build_samples_query(
+        task_id   = task_id,
+        sample_id = sample_id,
+        q         = q,
+        limit     = limit,
+        offset    = offset,
+    )
+
+    try:
+        raw_rows = _exec_query(data_sql, data_params)
+        total    = _exec_count(count_sql, count_params)
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"Database error: {exc}")
+
+    samples = [EvalSampleRow(**_coerce_sample_row(r)) for r in raw_rows]
+    return EvalSamplesResponse(
+        task_id = task_id,
+        samples = samples,
+        count   = len(samples),
+        total   = total,
+        limit   = limit,
+        offset  = offset,
+    )
+
+
+# ─────────────────────────────────────────────────────────────────
+# Entry point
+# ─────────────────────────────────────────────────────────────────
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8080, log_level="info")

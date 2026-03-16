@@ -1,0 +1,10 @@
+{"id": "e001", "prompt": "What is 2 + 2?", "expected": "4", "metadata": {"category": "math"}}
+{"id": "e002", "prompt": "What color is the sky?", "expected": "blue", "metadata": {"category": "general"}}
+{"id": "e003", "prompt": "What is the capital of France?", "expected": "Paris", "metadata": {"category": "geography"}}
+{"id": "e004", "prompt": "What does LLM stand for?", "expected": "Large Language Model", "metadata": {"category": "ai"}}
+{"id": "e005", "prompt": "What is the boiling point of water in Celsius?", "expected": "100", "metadata": {"category": "science"}}
+{"id": "e006", "prompt": "What year did World War II end?", "expected": "1945", "metadata": {"category": "history"}}
+{"id": "e007", "prompt": "What is the square root of 16?", "expected": "4", "metadata": {"category": "math"}}
+{"id": "e008", "prompt": "What does CPU stand for?", "expected": "Central Processing Unit", "metadata": {"category": "computing"}}
+{"id": "e009", "prompt": "What is the chemical symbol for water?", "expected": "H2O", "metadata": {"category": "science"}}
+{"id": "e010", "prompt": "How many days are in a week?", "expected": "7", "metadata": {"category": "general"}}

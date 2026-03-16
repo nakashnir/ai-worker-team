@@ -1,0 +1,17 @@
+{
+  "name": "eval_valid_v1_baseline",
+  "version": "a8-v2",
+  "updated_at": "2026-03-16",
+  "task_type": "eval.run",
+  "dataset_path": "shared/datasets/sample_eval_valid_v1.jsonl",
+  "model": "anthropic:claude-sonnet-4-5-20250929",
+  "scorers": [
+    "exact_match",
+    "contains_expected",
+    "format_nonempty"
+  ],
+  "thresholds": {
+    "min_exact_match_rate": 1.0,
+    "require_passed": true
+  }
+}

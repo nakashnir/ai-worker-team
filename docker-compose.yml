@@ -1,0 +1,100 @@
+version: "3.8"
+
+services:
+
+  # ── Postgres ──────────────────────────────────────────────────
+  postgres:
+    image: postgres:15-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER:     ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB:       ${POSTGRES_DB}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # ── Redis ─────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:6380:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # ── Qdrant ────────────────────────────────────────────────────
+  qdrant:
+    image: qdrant/qdrant:v1.9.2
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:6333:6333"
+    volumes:
+      - qdrant_data:/qdrant/storage
+
+  # ── Orchestrator ──────────────────────────────────────────────
+  orchestrator:
+    build:
+      context:    .
+      dockerfile: orchestrator/Dockerfile
+    restart: unless-stopped
+    environment:
+      REDIS_URL:         "redis://redis:6379/0"
+      POSTGRES_HOST:     postgres
+      POSTGRES_PORT:     "5432"
+      POSTGRES_DB:       ${POSTGRES_DB}
+      POSTGRES_USER:     ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      SHARED_DIR:        "/app/shared"
+    volumes:
+      - ./shared:/app/shared:ro
+    ports:
+      - "127.0.0.1:8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # ── Worker ────────────────────────────────────────────────────
+  worker:
+    build:
+      context:    .
+      dockerfile: workers/Dockerfile
+    restart: unless-stopped
+    environment:
+      REDIS_URL:         "redis://redis:6379/0"
+      POSTGRES_HOST:     postgres
+      POSTGRES_PORT:     "5432"
+      POSTGRES_DB:       ${POSTGRES_DB}
+      POSTGRES_USER:     ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      SHARED_DIR:        "/app/shared"
+      WORKER_ID:         "worker-1"
+      # Real provider key — value comes from .env on the VPS only, never hardcoded here
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      # A6 provider config — docker-compose defaults shown; override in .env if needed
+      DEFAULT_ANTHROPIC_MODEL:     ${DEFAULT_ANTHROPIC_MODEL:-claude-sonnet-4-5-20250929}
+      ANTHROPIC_TIMEOUT_SECS:      ${ANTHROPIC_TIMEOUT_SECS:-30}
+      ANTHROPIC_MAX_RETRIES:       ${ANTHROPIC_MAX_RETRIES:-2}
+      ANTHROPIC_BACKOFF_BASE_SECS: ${ANTHROPIC_BACKOFF_BASE_SECS:-1.0}
+      # Uncomment when OpenAI models are needed:
+      # OPENAI_API_KEY: ${OPENAI_API_KEY}
+    volumes:
+      - ./shared:/app/shared
+    depends_on:
+      redis:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
+  qdrant_data:

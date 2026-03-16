@@ -1,0 +1,7 @@
+{"id": "eval-001", "prompt": "What is the capital of France?", "expected": "Paris", "metadata": {"category": "geography"}}
+{"id": "eval-002", "prompt": "Explain the concept of recursion in programming.", "expected": null, "metadata": {"category": "cs"}}
+{"id": "eval-003", "prompt": "What is 2 + 2?", "expected": "4", "metadata": null}
+{"id": "", "prompt": "This line has an empty id field.", "expected": null}
+{"prompt": "This line is missing the id key entirely.", "expected": null}
+not valid json at all }{
+{"id": "eval-006", "prompt": "   ", "expected": null}

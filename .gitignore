@@ -1,0 +1,27 @@
+# Secrets and env
+.env
+.env.*
+
+# Backups and noise
+*.bak.*
+RUNBOOK.md.bak*
+docker-compose.yml.bak.*
+
+# Python caches
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+
+# Temporary upload/cache artifacts
+tmp_upload/
+*.tmp
+*.swp
+
+# Runtime outputs
+shared/runs/*
+shared/reports/*
+
+# Keep runtime directories
+!shared/runs/.gitkeep
+!shared/reports/.gitkeep
