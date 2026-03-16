@@ -53,7 +53,8 @@ while true; do
     break
   fi
   if [[ "${STATUS}" == "failed" ]]; then
-    echo "[nightly] task failed; see ${STATUS_JSON}" >&2
+    echo "[nightly] task failed; full status payload follows:" >&2
+    cat "${STATUS_JSON}" >&2 || true
     exit 1
   fi
   if (( attempt >= MAX_POLLS )); then

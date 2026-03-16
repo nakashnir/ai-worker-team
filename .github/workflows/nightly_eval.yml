@@ -56,6 +56,18 @@ jobs:
           echo "orchestrator did not become healthy in time" >&2
           exit 1
 
+      - name: Verify dataset file exists
+        shell: bash
+        run: |
+          test -f shared/datasets/sample_eval_valid_v1.jsonl
+
+      - name: Initialize Postgres schema
+        shell: bash
+        run: |
+          ${COMPOSE_CMD} exec -T postgres \
+            psql -v ON_ERROR_STOP=1 -U postgres -d ai_workers \
+            < ops/sql/001_evalops.sql
+
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
