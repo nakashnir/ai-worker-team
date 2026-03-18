@@ -1,0 +1,132 @@
+{% extends "base.html" %}
+{% block title %}Runs — EvalOps{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <h1>Eval Runs</h1>
+  <span class="total-badge">{{ total }} total</span>
+</div>
+
+{# ── Filter bar ── #}
+<form class="filter-bar" method="get" action="/dashboard">
+  <div class="filter-group">
+    <label>Status</label>
+    <select name="status">
+      <option value="">All</option>
+      {% for s in statuses %}
+        <option value="{{ s }}" {% if f_status == s %}selected{% endif %}>{{ s }}</option>
+      {% endfor %}
+    </select>
+  </div>
+
+  <div class="filter-group">
+    <label>Model</label>
+    <select name="model">
+      <option value="">All</option>
+      {% for m in models %}
+        <option value="{{ m }}" {% if f_model == m %}selected{% endif %}>{{ m | truncate(40, true, "…") }}</option>
+      {% endfor %}
+    </select>
+  </div>
+
+  <div class="filter-group">
+    <label>Provider</label>
+    <input type="text" name="provider" value="{{ f_provider }}" placeholder="e.g. Anthropic">
+  </div>
+
+  <div class="filter-group">
+    <label>Passed</label>
+    <select name="passed">
+      <option value="">Any</option>
+      <option value="true"  {% if f_passed == "true"  %}selected{% endif %}>✅ Yes</option>
+      <option value="false" {% if f_passed == "false" %}selected{% endif %}>❌ No</option>
+    </select>
+  </div>
+
+  <div class="filter-actions">
+    <button type="submit" class="btn btn-primary">Filter</button>
+    <a href="/dashboard" class="btn btn-secondary">Reset</a>
+  </div>
+</form>
+
+{# ── Runs table ── #}
+{% if runs %}
+<div class="table-wrap">
+  <table class="data-table runs-table">
+    <thead>
+      <tr>
+        <th>Task ID</th>
+        <th>Status</th>
+        <th>Model</th>
+        <th>EM Rate</th>
+        <th>Nonempty</th>
+        <th>Samples</th>
+        <th>Elapsed</th>
+        <th>Created</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for run in runs %}
+        {% set m = run.metrics or {} %}
+        <tr class="run-row run-status-{{ run.status or 'unknown' }}">
+          <td><code class="task-id" title="{{ run.task_id }}">{{ run.task_id[:8] }}&hellip;</code></td>
+          <td>
+            <span class="status-badge status-{{ run.status or 'unknown' }}">{{ run.status or '—' }}</span>
+          </td>
+          <td>
+            <span title="{{ run.model or '' }}">{{ (run.model or '—') | truncate(30, true, '…') }}</span>
+          </td>
+          <td class="col-metric">
+            {% if m.exact_match_rate is not none %}
+              {{ "%.1f"|format(m.exact_match_rate * 100) }}%
+            {% else %}<span class="dim">—</span>{% endif %}
+          </td>
+          <td class="col-metric">
+            {% if m.nonempty_rate is not none %}
+              {{ "%.1f"|format(m.nonempty_rate * 100) }}%
+            {% else %}<span class="dim">—</span>{% endif %}
+          </td>
+          <td class="col-metric">{{ m.total or '—' }}</td>
+          <td class="col-metric">
+            {% if m.elapsed_ms_total is not none %}
+              {{ m.elapsed_ms_total | int }}ms
+            {% else %}<span class="dim">—</span>{% endif %}
+          </td>
+          <td class="col-date">{{ (run.created_at or '')[:16] | replace("T"," ") }}</td>
+          <td>
+            <a class="btn btn-sm btn-outline" href="/dashboard/run/{{ run.task_id }}">View →</a>
+          </td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+{# ── Pagination ── #}
+{% if pages > 1 %}
+<nav class="pagination">
+  {% set bq %}status={{ f_status }}&model={{ f_model }}&provider={{ f_provider }}&passed={{ f_passed }}{% endset %}
+  {% if page > 1 %}
+    <a class="page-btn" href="/dashboard?{{ bq }}&page={{ page - 1 }}">&laquo; Prev</a>
+  {% else %}
+    <span class="page-btn disabled">&laquo; Prev</span>
+  {% endif %}
+  <span class="page-info">Page {{ page }} of {{ pages }}</span>
+  {% if page < pages %}
+    <a class="page-btn" href="/dashboard?{{ bq }}&page={{ page + 1 }}">Next &raquo;</a>
+  {% else %}
+    <span class="page-btn disabled">Next &raquo;</span>
+  {% endif %}
+</nav>
+{% endif %}
+
+{% else %}
+<div class="empty-state">
+  <p>No runs found{% if f_status or f_model or f_provider or f_passed %} matching current filters{% endif %}.</p>
+  {% if f_status or f_model or f_provider or f_passed %}
+    <a href="/dashboard" class="btn btn-secondary">Clear filters</a>
+  {% endif %}
+</div>
+{% endif %}
+{% endblock %}

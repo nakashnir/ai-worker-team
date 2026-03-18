@@ -1,0 +1,170 @@
+{% extends "base.html" %}
+{% block title %}Run {{ run.task_id[:8] }} — EvalOps{% endblock %}
+
+{% block content %}
+
+<nav class="breadcrumb">
+  <a href="/dashboard">Runs</a>
+  <span class="sep">›</span>
+  <span>{{ run.task_id[:8] }}&hellip;</span>
+</nav>
+
+{# ── Run header ── #}
+<div class="page-header run-header">
+  <div>
+    <h1>
+      <span class="status-badge status-{{ run.status or 'unknown' }} status-lg">{{ run.status or '—' }}</span>
+      <code class="run-id-full">{{ run.task_id }}</code>
+    </h1>
+    {% if run.model %}<p class="run-subtitle"><code>{{ run.model }}</code></p>{% endif %}
+  </div>
+  <div class="run-dates">
+    {% if run.created_at %}
+      <div><span class="dim">Created</span> {{ run.created_at[:19] | replace("T"," ") }} UTC</div>
+    {% endif %}
+    {% if run.completed_at %}
+      <div><span class="dim">Completed</span> {{ run.completed_at[:19] | replace("T"," ") }} UTC</div>
+    {% endif %}
+  </div>
+</div>
+
+{# ── Metrics cards ── #}
+<section class="metrics-section">
+  <h2>Metrics</h2>
+  <div class="metrics-grid">
+
+    {% macro mc(label, value, unit="") %}
+      <div class="metric-card">
+        <div class="metric-label">{{ label }}</div>
+        <div class="metric-value">
+          {% if value is not none %}{{ value }}{% if unit %}<span class="metric-unit">{{ unit }}</span>{% endif %}
+          {% else %}<span class="dim">—</span>{% endif %}
+        </div>
+      </div>
+    {% endmacro %}
+
+    {{ mc("Total Samples", metrics.total) }}
+
+    {% if metrics.exact_match_rate is not none %}
+      {{ mc("Exact Match", "%.1f"|format(metrics.exact_match_rate * 100), "%") }}
+    {% else %}{{ mc("Exact Match", none) }}{% endif %}
+
+    {% if metrics.contains_expected_rate is not none %}
+      {{ mc("Contains Expected", "%.1f"|format(metrics.contains_expected_rate * 100), "%") }}
+    {% else %}{{ mc("Contains Expected", none) }}{% endif %}
+
+    {% if metrics.nonempty_rate is not none %}
+      {{ mc("Non-empty Rate", "%.1f"|format(metrics.nonempty_rate * 100), "%") }}
+    {% else %}{{ mc("Non-empty Rate", none) }}{% endif %}
+
+    {% if metrics.elapsed_ms_total is not none %}
+      {{ mc("Elapsed (total)", metrics.elapsed_ms_total | int, " ms") }}
+    {% else %}{{ mc("Elapsed (total)", none) }}{% endif %}
+
+    {% if metrics.elapsed_ms_avg is not none %}
+      {{ mc("Elapsed (avg)", metrics.elapsed_ms_avg | int, " ms") }}
+    {% else %}{{ mc("Elapsed (avg)", none) }}{% endif %}
+
+    {{ mc("Retries", metrics.retries_count) }}
+
+    {% if metrics.usage %}
+      {{ mc("Input tokens",  metrics.usage.input_tokens) }}
+      {{ mc("Output tokens", metrics.usage.output_tokens) }}
+    {% endif %}
+
+    {% if metrics.passed is not none %}
+      <div class="metric-card metric-passed-{{ metrics.passed | lower }}">
+        <div class="metric-label">Passed</div>
+        <div class="metric-value">{{ "✅ Yes" if metrics.passed else "❌ No" }}</div>
+      </div>
+    {% endif %}
+  </div>
+</section>
+
+{# ── Run info ── #}
+<section class="meta-section">
+  <h2>Run Info</h2>
+  <table class="meta-table">
+    <tbody>
+      <tr><th>Task ID</th>     <td><code>{{ run.task_id }}</code></td></tr>
+      <tr><th>Dataset</th>     <td><code>{{ run.dataset_path or '—' }}</code></td></tr>
+      <tr><th>Model</th>       <td><code>{{ run.model or '—' }}</code></td></tr>
+      {% if run.report_path %}
+        <tr><th>Report</th>    <td><code>{{ run.report_path }}</code></td></tr>
+      {% endif %}
+      {% if run.results_path %}
+        <tr><th>Results</th>   <td><code>{{ run.results_path }}</code></td></tr>
+      {% endif %}
+    </tbody>
+  </table>
+</section>
+
+{# ── Samples ── #}
+<section class="samples-section">
+  <div class="samples-header">
+    <h2>Samples <span class="total-badge">{{ samples_total }}</span></h2>
+    <form class="search-form" method="get" action="/dashboard/run/{{ run.task_id }}">
+      <input type="text" name="q" value="{{ q }}" placeholder="Search prompt / expected / output…">
+      <button type="submit" class="btn btn-primary btn-sm">Search</button>
+      {% if q %}<a href="/dashboard/run/{{ run.task_id }}" class="btn btn-secondary btn-sm">Clear</a>{% endif %}
+    </form>
+  </div>
+
+  {% if samples %}
+  <div class="table-wrap">
+    <table class="data-table samples-table">
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>Sample ID</th>
+          <th>Prompt</th>
+          <th>Expected</th>
+          <th>Output</th>
+          <th>Scores</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for s in samples %}
+          {% set sc = s.scores or {} %}
+          <tr class="sample-row {% if sc.exact_match %}sample-pass{% elif sc.exact_match is not none %}sample-fail{% endif %}">
+            <td class="col-num">{{ (samples_page - 1) * 25 + loop.index }}</td>
+            <td><code>{{ s.sample_id or '—' }}</code></td>
+            <td><div class="cell-clamp" title="{{ s.prompt or '' }}">{{ s.prompt or '—' }}</div></td>
+            <td><div class="cell-clamp" title="{{ s.expected or '' }}">{{ s.expected or '—' }}</div></td>
+            <td><div class="cell-clamp" title="{{ s.output or '' }}">{{ s.output or '—' }}</div></td>
+            <td>
+              {% if s.scores %}
+                {% for k, v in s.scores.items() %}
+                  <span class="score-chip score-{{ 'pass' if v else 'fail' }}">{{ k }}:{{ "✓" if v else "✗" }}</span>
+                {% endfor %}
+              {% else %}<span class="dim">—</span>{% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  {% if samples_pages > 1 %}
+  <nav class="pagination">
+    {% if samples_page > 1 %}
+      <a class="page-btn" href="/dashboard/run/{{ run.task_id }}?q={{ q }}&samples_page={{ samples_page - 1 }}">&laquo; Prev</a>
+    {% else %}
+      <span class="page-btn disabled">&laquo; Prev</span>
+    {% endif %}
+    <span class="page-info">Page {{ samples_page }} of {{ samples_pages }}</span>
+    {% if samples_page < samples_pages %}
+      <a class="page-btn" href="/dashboard/run/{{ run.task_id }}?q={{ q }}&samples_page={{ samples_page + 1 }}">Next &raquo;</a>
+    {% else %}
+      <span class="page-btn disabled">Next &raquo;</span>
+    {% endif %}
+  </nav>
+  {% endif %}
+
+  {% else %}
+  <div class="empty-state">
+    <p>No samples found{% if q %} for query <em>"{{ q }}"</em>{% endif %}.</p>
+  </div>
+  {% endif %}
+</section>
+{% endblock %}

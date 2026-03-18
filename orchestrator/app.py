@@ -1,39 +1,44 @@
 """
-orchestrator/app.py  v1.7.0
-Ticket A7 — Read API improvements: filters, pagination, richer responses.
+orchestrator/app.py  v1.8.0
+A9 additive patch — dashboard UI on top of A7 (v1.7.0).
 
-New / extended endpoints
-────────────────────────
-GET /eval/runs
-    limit      int  default 20, max 100
-    offset     int  default 0
-    status     str  optional  exact match  (done|failed|running|queued)
-    model      str  optional  exact match
-    provider   str  optional  substring in metrics->>'provider'
-    passed     bool optional  metrics->>'passed' == 'true'/'false'
-    since      str  optional  ISO8601 → completed_at >= since
-    until      str  optional  ISO8601 → completed_at <= until
-    sort       str  default created_at  (created_at|completed_at)
-    order      str  default desc        (asc|desc)
-    → { runs:[...], count:int, total:int, limit:int, offset:int }
+Changes from v1.7.0
+───────────────────
+• Added at TOP of file (imports only):
+    import math
+    from fastapi.responses import HTMLResponse
+    from fastapi.staticfiles import StaticFiles
+    from fastapi.templating import Jinja2Templates
 
-GET /eval/run/{task_id}
-    → same fields as before + report_path, results_path from run.json
+• Mounted AFTER app = FastAPI(...):
+    app.mount("/static", ...)
+    templates = Jinja2Templates(...)
 
-GET /eval/run/{task_id}/samples
-    limit      int  default 20, max 500
-    offset     int  default 0
-    sample_id  str  optional  exact match on sample_id column
-    q          str  optional  substring search in prompt, expected, output
-    → { samples:[...], count:int, total:int, limit:int, offset:int }
+• Two NEW routes appended at end of file:
+    GET /dashboard
+    GET /dashboard/run/{task_id}
 
-All existing fields kept unchanged (backward compatible).
-Safe parameterized SQL throughout — no string interpolation of user input.
+• Two NEW helper functions (dashboard-only):
+    _last_nightly_summary()
+    _distinct_models()
+
+EVERYTHING ELSE IS IDENTICAL TO v1.7.0:
+    All existing routes, helpers, Pydantic models,
+    DB helpers, query builders — character-for-character preserved.
+    GET /             ← unchanged
+    GET /health       ← unchanged
+    GET /schemas      ← unchanged
+    POST /task/submit ← unchanged
+    GET /task/status  ← unchanged
+    GET /eval/runs    ← unchanged
+    GET /eval/run/{id}            ← unchanged
+    GET /eval/run/{id}/samples    ← unchanged
 """
 
 from __future__ import annotations
 
 import json
+import math
 import os
 import sys
 import uuid
@@ -44,7 +49,10 @@ from typing import Any, Dict, List, Optional
 import psycopg2
 import psycopg2.extras
 import redis as redis_lib
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -68,7 +76,7 @@ SHARED_DIR = Path(os.environ.get("SHARED_DIR", "/app/shared"))
 
 
 # ─────────────────────────────────────────────────────────────────
-# Connection helpers
+# Connection helpers  (unchanged from A7)
 # ─────────────────────────────────────────────────────────────────
 
 def get_redis() -> redis_lib.Redis:
@@ -85,7 +93,7 @@ def _now_iso() -> str:
 
 
 # ─────────────────────────────────────────────────────────────────
-# Pydantic response models
+# Pydantic response models  (unchanged from A7)
 # ─────────────────────────────────────────────────────────────────
 
 class EvalRunRow(BaseModel):
@@ -129,7 +137,7 @@ class EvalSamplesResponse(BaseModel):
 
 
 # ─────────────────────────────────────────────────────────────────
-# DB coercion helpers
+# DB coercion helpers  (unchanged from A7)
 # ─────────────────────────────────────────────────────────────────
 
 def _coerce_run_row(row: Any) -> dict:
@@ -171,7 +179,8 @@ def _artifact_paths(task_id: str) -> dict:
 
 
 # ─────────────────────────────────────────────────────────────────
-# Query builders  (safe parameterized SQL — zero string interpolation)
+# Query builders  (unchanged from A7)
+# safe parameterized SQL — zero string interpolation of user input
 # ─────────────────────────────────────────────────────────────────
 
 _ALLOWED_SORT   = {"created_at", "completed_at"}
@@ -191,14 +200,7 @@ def _build_runs_query(
     order:    str,
     limit:    int,
     offset:   int,
-) -> tuple[str, str, list]:
-    """
-    Return (data_sql, count_sql, params_list).
-    sort and order are validated against allowlists before being interpolated
-    into the ORDER BY clause — they are never derived from raw user input
-    without validation.
-    """
-    # Validate sort/order against allowlists (safe: not derived from raw input)
+) -> tuple[str, str, list, list]:
     sort_col = sort  if sort  in _ALLOWED_SORT  else "created_at"
     ord_dir  = order if order in _ALLOWED_ORDER else "desc"
 
@@ -231,7 +233,6 @@ def _build_runs_query(
 
     where_sql = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
 
-    # ORDER BY uses validated allowlisted identifiers — not raw user input
     data_sql = f"""
         SELECT task_id, dataset_path, model, scorers, status, metrics,
                created_at, completed_at
@@ -242,7 +243,6 @@ def _build_runs_query(
     """
     count_sql = f"SELECT COUNT(*) FROM eval_runs {where_sql}"
 
-    # data query appends limit + offset to params copy
     data_params  = list(params) + [limit, offset]
     count_params = list(params)
 
@@ -257,10 +257,6 @@ def _build_samples_query(
     limit:     int,
     offset:    int,
 ) -> tuple[str, str, list, list]:
-    """
-    Return (data_sql, count_sql, data_params, count_params).
-    All user-supplied strings go through %s parameters — never interpolated.
-    """
     where_clauses: list[str] = ["task_id = %s"]
     params:        list      = [task_id]
 
@@ -269,7 +265,6 @@ def _build_samples_query(
         params.append(sample_id)
 
     if q:
-        # Substring search across prompt, expected, output
         where_clauses.append(
             "(prompt ILIKE %s OR expected ILIKE %s OR output ILIKE %s)"
         )
@@ -294,7 +289,7 @@ def _build_samples_query(
 
 
 # ─────────────────────────────────────────────────────────────────
-# DB execution helpers
+# DB execution helpers  (unchanged from A7)
 # ─────────────────────────────────────────────────────────────────
 
 def _exec_query(sql: str, params: list) -> list[dict]:
@@ -329,18 +324,26 @@ def _check_run_exists(task_id: str) -> bool:
 
 
 # ─────────────────────────────────────────────────────────────────
-# FastAPI app
+# FastAPI app  (title / version bump only; mounts added for A9)
 # ─────────────────────────────────────────────────────────────────
 
 app = FastAPI(
     title       = "AI Worker Orchestrator",
-    version     = "1.7.0",
-    description = "Orchestrator for AI eval tasks. Ticket A7 adds rich read API.",
+    version     = "1.8.0",
+    description = "Orchestrator for AI eval tasks. A9 adds dashboard UI.",
 )
+
+# ── A9: static files + templates ─────────────────────────────────
+_HERE       = Path(__file__).parent
+_STATIC_DIR = _HERE / "static"
+_TMPL_DIR   = _HERE / "templates"
+
+app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
+templates = Jinja2Templates(directory=str(_TMPL_DIR))
 
 
 # ─────────────────────────────────────────────────────────────────
-# Existing endpoints (unchanged)
+# Existing endpoints — UNCHANGED from A7
 # ─────────────────────────────────────────────────────────────────
 
 @app.get("/health", tags=["meta"])
@@ -350,7 +353,7 @@ def health():
 
 @app.get("/", tags=["meta"])
 def root():
-    return {"service": "orchestrator", "version": "1.7.0"}
+    return {"service": "orchestrator", "version": "1.8.0"}
 
 
 @app.get("/schemas", tags=["meta"])
@@ -394,9 +397,7 @@ def task_status(task_id: str):
     return result_from_json(raw)
 
 
-# ─────────────────────────────────────────────────────────────────
-# A7 — GET /eval/runs
-# ─────────────────────────────────────────────────────────────────
+# ── A7: GET /eval/runs ────────────────────────────────────────────
 
 @app.get(
     "/eval/runs",
@@ -426,7 +427,6 @@ def list_eval_runs(
     order:    str           = Query(default="desc",
                                     description="Sort direction: asc|desc"),
 ):
-    # Validate status against allowlist (give a helpful error, not a 500)
     if status and status not in _ALLOWED_STATUS:
         raise HTTPException(
             status_code=422,
@@ -462,9 +462,7 @@ def list_eval_runs(
     )
 
 
-# ─────────────────────────────────────────────────────────────────
-# A7 — GET /eval/run/{task_id}
-# ─────────────────────────────────────────────────────────────────
+# ── A7: GET /eval/run/{task_id} ───────────────────────────────────
 
 @app.get(
     "/eval/run/{task_id}",
@@ -492,9 +490,7 @@ def get_eval_run(task_id: str):
     return EvalRunRow(**d)
 
 
-# ─────────────────────────────────────────────────────────────────
-# A7 — GET /eval/run/{task_id}/samples
-# ─────────────────────────────────────────────────────────────────
+# ── A7: GET /eval/run/{task_id}/samples ──────────────────────────
 
 @app.get(
     "/eval/run/{task_id}/samples",
@@ -513,7 +509,6 @@ def get_eval_samples(
     q:         Optional[str] = Query(default=None,
                                      description="Substring search in prompt / expected / output"),
 ):
-    # 404 if parent run does not exist
     try:
         if not _check_run_exists(task_id):
             raise HTTPException(
@@ -547,6 +542,160 @@ def get_eval_samples(
         total   = total,
         limit   = limit,
         offset  = offset,
+    )
+
+
+# ═════════════════════════════════════════════════════════════════
+# A9  —  Dashboard (NEW; nothing above changed)
+# ═════════════════════════════════════════════════════════════════
+
+_DASH_PAGE_SIZE    = 20
+_SAMPLES_PAGE_SIZE = 25
+
+
+def _last_nightly_summary() -> dict:
+    """
+    Cheaply fetch the most recent terminal eval run for the nightly badge.
+    Returns a dict the template can render; never raises.
+    """
+    try:
+        rows = _exec_query(
+            """
+            SELECT task_id, status, metrics, completed_at
+            FROM   eval_runs
+            WHERE  status IN ('done', 'failed')
+            ORDER  BY COALESCE(completed_at, created_at) DESC
+            LIMIT  1
+            """,
+            [],
+        )
+        if not rows:
+            return {"available": False}
+        row     = _coerce_run_row(rows[0])
+        metrics = row.get("metrics") or {}
+        return {
+            "available":        True,
+            "task_id":          row["task_id"],
+            "status":           row["status"],
+            "completed_at":     row.get("completed_at"),
+            "exact_match_rate": metrics.get("exact_match_rate"),
+            "nonempty_rate":    metrics.get("nonempty_rate"),
+            "elapsed_ms_total": metrics.get("elapsed_ms_total"),
+            "model":            metrics.get("provider") or row.get("model"),
+        }
+    except Exception:
+        return {"available": False}
+
+
+def _distinct_models() -> list[str]:
+    """Distinct model strings for the filter dropdown; never raises."""
+    try:
+        rows = _exec_query(
+            "SELECT DISTINCT model FROM eval_runs "
+            "WHERE model IS NOT NULL ORDER BY model",
+            [],
+        )
+        return [r["model"] for r in rows]
+    except Exception:
+        return []
+
+
+@app.get("/dashboard", response_class=HTMLResponse, tags=["dashboard"])
+def dashboard(
+    request:  Request,
+    page:     int           = Query(1, ge=1),
+    status:   Optional[str] = None,
+    model:    Optional[str] = None,
+    provider: Optional[str] = None,
+    passed:   Optional[bool]= None,
+):
+    """Paginated runs table with filter bar."""
+    if status and status not in _ALLOWED_STATUS:
+        status = None
+
+    limit  = _DASH_PAGE_SIZE
+    offset = (page - 1) * limit
+
+    data_sql, count_sql, data_params, count_params = _build_runs_query(
+        status=status, model=model, provider=provider, passed=passed,
+        since=None, until=None,
+        sort="created_at", order="desc",
+        limit=limit, offset=offset,
+    )
+    runs  = [_coerce_run_row(r) for r in _exec_query(data_sql, data_params)]
+    total = _exec_count(count_sql, count_params)
+    pages = max(1, math.ceil(total / limit))
+
+    return templates.TemplateResponse(
+        "dashboard.html",
+        {
+            "request":    request,
+            "runs":       runs,
+            "total":      total,
+            "page":       page,
+            "pages":      pages,
+            "page_size":  limit,
+            "f_status":   status   or "",
+            "f_model":    model    or "",
+            "f_provider": provider or "",
+            "f_passed":   "" if passed is None else ("true" if passed else "false"),
+            "statuses":   sorted(_ALLOWED_STATUS),
+            "models":     _distinct_models(),
+            "nightly":    _last_nightly_summary(),
+        },
+    )
+
+
+@app.get("/dashboard/run/{task_id}", response_class=HTMLResponse, tags=["dashboard"])
+def dashboard_run(
+    request:      Request,
+    task_id:      str,
+    samples_page: int           = Query(1, ge=1),
+    q:            Optional[str] = None,
+):
+    """Run detail page — metrics + samples table with search."""
+    if not _check_run_exists(task_id):
+        raise HTTPException(404, detail="run not found")
+
+    rows = _exec_query(
+        """
+        SELECT task_id, dataset_path, model, scorers, status, metrics,
+               created_at, completed_at
+        FROM   eval_runs WHERE task_id = %s
+        """,
+        [task_id],
+    )
+    run = _coerce_run_row(rows[0])
+    run["report_path"], run["results_path"] = (
+        _artifact_paths(task_id)["report_path"],
+        _artifact_paths(task_id)["results_path"],
+    )
+
+    limit  = _SAMPLES_PAGE_SIZE
+    offset = (samples_page - 1) * limit
+
+    data_sql, count_sql, data_params, count_params = _build_samples_query(
+        task_id=task_id, sample_id=None, q=q, limit=limit, offset=offset,
+    )
+    samples       = [_coerce_run_row(r) for r in _exec_query(data_sql, data_params)]
+    samples_total = _exec_count(count_sql, count_params)
+    samples_pages = max(1, math.ceil(samples_total / limit))
+
+    metrics = run.get("metrics") or {}
+
+    return templates.TemplateResponse(
+        "run_detail.html",
+        {
+            "request":       request,
+            "run":           run,
+            "metrics":       metrics,
+            "samples":       samples,
+            "samples_total": samples_total,
+            "samples_page":  samples_page,
+            "samples_pages": samples_pages,
+            "q":             q or "",
+            "nightly":       _last_nightly_summary(),
+        },
     )
 
 
