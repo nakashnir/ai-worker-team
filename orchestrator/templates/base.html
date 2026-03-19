@@ -4,33 +4,43 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}EvalOps{% endblock %}</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/static/css/dashboard.css">
 </head>
 <body>
 
 <header class="site-header">
   <div class="header-inner">
-    <a class="logo" href="/dashboard">⚗️ EvalOps</a>
+    <a class="logo" href="/dashboard">
+      <span class="logo-mark">⬡</span> evalops
+    </a>
+
+    <div class="header-divider"></div>
+
     <nav>
       <a href="/dashboard">Runs</a>
-      <a href="/docs" target="_blank">API</a>
+      <a href="/docs" target="_blank">API ↗</a>
     </nav>
 
-    {# ── Last nightly badge ── #}
+    {# ── Nightly pill ── #}
     {% if nightly and nightly.available %}
       {% set ns = nightly %}
-      <div class="nightly-badge nightly-{{ ns.status }}">
+      <div class="nightly-pill nightly-{{ ns.status }}">
         <span class="nightly-dot"></span>
-        <span class="nightly-label">
-          Last:&nbsp;<strong>{{ ns.status | upper }}</strong>
-          {% if ns.model %}&nbsp;·&nbsp;<code>{{ ns.model | truncate(28, true, "…") }}</code>{% endif %}
-          {% if ns.completed_at %}&nbsp;·&nbsp;{{ ns.completed_at[:16] | replace("T"," ") }} UTC{% endif %}
+        <span class="nightly-pill-label">
+          nightly
+          <strong>{{ ns.status | upper }}</strong>
         </span>
+        {% if ns.completed_at %}
+          <span class="nightly-pill-ts">{{ ns.completed_at[:10] }}</span>
+        {% endif %}
       </div>
     {% else %}
-      <div class="nightly-badge nightly-unknown">
+      <div class="nightly-pill nightly-unknown">
         <span class="nightly-dot"></span>
-        <span class="nightly-label">No runs yet</span>
+        <span class="nightly-pill-label">no runs yet</span>
       </div>
     {% endif %}
   </div>
@@ -41,7 +51,7 @@
 </main>
 
 <footer class="site-footer">
-  EvalOps · read-only dashboard &nbsp;·&nbsp; <a href="/docs">API docs</a>
+  evalops &nbsp;·&nbsp; read-only dashboard &nbsp;·&nbsp; <a href="/docs">api docs</a>
 </footer>
 
 <script src="/static/js/dashboard.js"></script>

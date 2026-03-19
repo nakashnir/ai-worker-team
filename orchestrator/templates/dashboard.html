@@ -2,17 +2,133 @@
 {% block title %}Runs — EvalOps{% endblock %}
 
 {% block content %}
-<div class="page-header">
-  <h1>Eval Runs</h1>
-  <span class="total-badge">{{ total }} total</span>
+
+{# ── Summary cards ── #}
+{% set total_done   = runs | selectattr("status", "equalto", "done")   | list | length %}
+{% set total_failed = runs | selectattr("status", "equalto", "failed") | list | length %}
+
+<div class="summary-row">
+
+  {# Total #}
+  <div class="summary-card card-total">
+    <div class="summary-label">Total Runs</div>
+    <div class="summary-value">{{ total }}</div>
+    <div class="summary-sub">
+      {% if f_status or f_model or f_provider or f_passed %}filtered view{% else %}all time{% endif %}
+    </div>
+  </div>
+
+  {# Done — count from DB via status filter would need backend change,
+     so we derive from current page for quick visual signal #}
+  <div class="summary-card card-done">
+    <div class="summary-label">Done</div>
+    <div class="summary-value text-green">
+      {% if not f_status and not f_model and not f_provider and not f_passed %}
+        {{ total_done }}
+      {% else %}
+        {{ total_done }}
+      {% endif %}
+    </div>
+    <div class="summary-sub">this page</div>
+  </div>
+
+  {# Failed #}
+  <div class="summary-card card-failed">
+    <div class="summary-label">Failed</div>
+    <div class="summary-value text-red">{{ total_failed }}</div>
+    <div class="summary-sub">this page</div>
+  </div>
+
+  {# Passed (exact_match = 100%) #}
+  {% set passed_count = runs | selectattr("metrics") | selectattr("metrics.passed", "equalto", true) | list | length %}
+  <div class="summary-card card-passed">
+    <div class="summary-label">Passed</div>
+    <div class="summary-value" style="color:#a78bfa;">{{ passed_count }}</div>
+    <div class="summary-sub">this page</div>
+  </div>
+
+  {# Last nightly #}
+  <div class="summary-card card-nightly">
+    <div class="summary-label">Last Run</div>
+    {% if nightly and nightly.available %}
+      {% set ns = nightly %}
+      <div class="summary-value nightly-status-{{ ns.status }}">
+        {{ ns.status | upper }}
+      </div>
+      <div class="summary-sub">
+        {% if ns.completed_at %}{{ ns.completed_at[:16] | replace("T"," ") }} UTC{% endif %}
+      </div>
+    {% else %}
+      <div class="summary-value nightly-status-unknown">—</div>
+      <div class="summary-sub">no runs yet</div>
+    {% endif %}
+  </div>
+
 </div>
 
-{# ── Filter bar ── #}
+{# ── Nightly detail block ── #}
+{% if nightly and nightly.available %}
+  {% set ns = nightly %}
+  {% set ns_metrics = ns.metrics or {} %}
+  {% set ns_exact_match_rate = ns_metrics.get('exact_match_rate') %}
+  {% set ns_nonempty_rate = ns_metrics.get('nonempty_rate') %}
+  {% set ns_elapsed_ms_total = ns_metrics.get('elapsed_ms_total') %}
+  <div class="nightly-block">
+    <span class="nightly-block-label">◆ Last Run</span>
+    <span class="nightly-block-status nightly-status-{{ ns.status }}">
+      {{ ns.status | upper }}
+    </span>
+    <div class="nightly-block-meta">
+      {% if ns.model %}
+        <span><span class="meta-key">model</span> {{ ns.model | truncate(40, true, "…") }}</span>
+      {% endif %}
+      {% if ns_exact_match_rate is not none %}
+        <span><span class="meta-key">em</span> {{ "%.1f"|format(ns_exact_match_rate * 100) }}%</span>
+      {% endif %}
+      {% if ns_nonempty_rate is not none %}
+        <span><span class="meta-key">nonempty</span> {{ "%.1f"|format(ns_nonempty_rate * 100) }}%</span>
+      {% endif %}
+      {% if ns_elapsed_ms_total is not none %}
+        <span><span class="meta-key">elapsed</span> {{ ns_elapsed_ms_total }}ms</span>
+      {% endif %}
+      {% if ns.completed_at %}
+        <span><span class="meta-key">at</span> {{ ns.completed_at[:19] | replace("T"," ") }} UTC</span>
+      {% endif %}
+    </div>
+    {% if ns.task_id %}
+      <a class="btn btn-ghost btn-sm nightly-block-link" href="/dashboard/run/{{ ns.task_id }}">View run →</a>
+    {% endif %}
+  </div>
+{% endif %}
+
+{# ── Page header + filter bar ── #}
+<div class="page-header">
+  <div class="page-title-group">
+    <h1>
+      Eval Runs
+      <span class="total-badge">{{ total }}</span>
+      {% if f_status or f_model or f_provider or f_passed %}
+        <span class="filter-active-indicator" title="Filters active"></span>
+      {% endif %}
+    </h1>
+    {% if f_status or f_model or f_provider or f_passed %}
+      <p class="active-filters-note">
+        Filtered by:
+        {% if f_status %}<code>status={{ f_status }}</code>{% endif %}
+        {% if f_model %}<code>model={{ f_model | truncate(20, true, "…") }}</code>{% endif %}
+        {% if f_provider %}<code>provider={{ f_provider }}</code>{% endif %}
+        {% if f_passed %}<code>passed={{ f_passed }}</code>{% endif %}
+        &nbsp;·&nbsp;<a href="/dashboard">clear all</a>
+      </p>
+    {% endif %}
+  </div>
+</div>
+
 <form class="filter-bar" method="get" action="/dashboard">
   <div class="filter-group">
-    <label>Status</label>
+    <label class="filter-row-label">Status</label>
     <select name="status">
-      <option value="">All</option>
+      <option value="">All statuses</option>
       {% for s in statuses %}
         <option value="{{ s }}" {% if f_status == s %}selected{% endif %}>{{ s }}</option>
       {% endfor %}
@@ -20,32 +136,34 @@
   </div>
 
   <div class="filter-group">
-    <label>Model</label>
+    <label class="filter-row-label">Model</label>
     <select name="model">
-      <option value="">All</option>
+      <option value="">All models</option>
       {% for m in models %}
-        <option value="{{ m }}" {% if f_model == m %}selected{% endif %}>{{ m | truncate(40, true, "…") }}</option>
+        <option value="{{ m }}" {% if f_model == m %}selected{% endif %}>{{ m | truncate(38, true, "…") }}</option>
       {% endfor %}
     </select>
   </div>
 
   <div class="filter-group">
-    <label>Provider</label>
-    <input type="text" name="provider" value="{{ f_provider }}" placeholder="e.g. Anthropic">
+    <label class="filter-row-label">Provider</label>
+    <input type="text" name="provider" value="{{ f_provider }}" placeholder="substring match…">
   </div>
 
-  <div class="filter-group">
-    <label>Passed</label>
+  <div class="filter-group" style="min-width:100px;">
+    <label class="filter-row-label">Passed</label>
     <select name="passed">
       <option value="">Any</option>
-      <option value="true"  {% if f_passed == "true"  %}selected{% endif %}>✅ Yes</option>
-      <option value="false" {% if f_passed == "false" %}selected{% endif %}>❌ No</option>
+      <option value="true"  {% if f_passed == "true"  %}selected{% endif %}>Yes ✓</option>
+      <option value="false" {% if f_passed == "false" %}selected{% endif %}>No ✗</option>
     </select>
   </div>
 
   <div class="filter-actions">
-    <button type="submit" class="btn btn-primary">Filter</button>
-    <a href="/dashboard" class="btn btn-secondary">Reset</a>
+    <button type="submit" class="btn btn-primary">Apply</button>
+    {% if f_status or f_model or f_provider or f_passed %}
+      <a href="/dashboard" class="btn btn-secondary">Reset</a>
+    {% endif %}
   </div>
 </form>
 
@@ -59,43 +177,82 @@
         <th>Status</th>
         <th>Model</th>
         <th>EM Rate</th>
-        <th>Nonempty</th>
         <th>Samples</th>
         <th>Elapsed</th>
         <th>Created</th>
-        <th></th>
+        <th class="col-action"></th>
       </tr>
     </thead>
     <tbody>
       {% for run in runs %}
         {% set m = run.metrics or {} %}
+        {% set em = m.get('exact_match_rate') %}
+        {% set total_samples = m.get('total') %}
+        {% set elapsed_ms_total = m.get('elapsed_ms_total') %}
         <tr class="run-row run-status-{{ run.status or 'unknown' }}">
-          <td><code class="task-id" title="{{ run.task_id }}">{{ run.task_id[:8] }}&hellip;</code></td>
+
+          {# Task ID #}
           <td>
-            <span class="status-badge status-{{ run.status or 'unknown' }}">{{ run.status or '—' }}</span>
+            <code title="{{ run.task_id }}">{{ run.task_id[:8] }}…</code>
           </td>
+
+          {# Status badge #}
           <td>
-            <span title="{{ run.model or '' }}">{{ (run.model or '—') | truncate(30, true, '…') }}</span>
+            <span class="status-badge status-{{ run.status or 'unknown' }}">
+              {{ run.status or '—' }}
+            </span>
           </td>
-          <td class="col-metric">
-            {% if m.exact_match_rate is not none %}
-              {{ "%.1f"|format(m.exact_match_rate * 100) }}%
-            {% else %}<span class="dim">—</span>{% endif %}
-          </td>
-          <td class="col-metric">
-            {% if m.nonempty_rate is not none %}
-              {{ "%.1f"|format(m.nonempty_rate * 100) }}%
-            {% else %}<span class="dim">—</span>{% endif %}
-          </td>
-          <td class="col-metric">{{ m.total or '—' }}</td>
-          <td class="col-metric">
-            {% if m.elapsed_ms_total is not none %}
-              {{ m.elapsed_ms_total | int }}ms
-            {% else %}<span class="dim">—</span>{% endif %}
-          </td>
-          <td class="col-date">{{ (run.created_at or '')[:16] | replace("T"," ") }}</td>
+
+          {# Model — truncated with tooltip #}
           <td>
-            <a class="btn btn-sm btn-outline" href="/dashboard/run/{{ run.task_id }}">View →</a>
+            <span class="mono" style="font-size:.78rem;" title="{{ run.model or '' }}">
+              {{ (run.model or '—') | truncate(35, true, '…') }}
+            </span>
+          </td>
+
+          {# EM rate with mini bar #}
+          <td class="col-metric">
+            {% if em is not none %}
+              {% set pct = (em * 100) | round(1) %}
+              <div class="rate-bar">
+                <div class="rate-track">
+                  <div class="rate-fill {% if pct == 100 %}{% elif pct >= 50 %}rate-partial{% else %}rate-zero{% endif %}"
+                       style="width:{{ pct }}%"></div>
+                </div>
+                <span class="rate-text">{{ "%.1f"|format(pct) }}%</span>
+              </div>
+            {% else %}
+              <span class="dim">—</span>
+            {% endif %}
+          </td>
+
+          {# Samples #}
+          <td class="col-metric">{{ total_samples if total_samples is not none else '—' }}</td>
+
+          {# Elapsed #}
+          <td class="col-metric">
+            {% if elapsed_ms_total is not none %}
+              {% set ms = elapsed_ms_total | int %}
+              {% if ms >= 60000 %}
+                {{ (ms / 60000) | round(1) }}m
+              {% elif ms >= 1000 %}
+                {{ (ms / 1000) | round(1) }}s
+              {% else %}
+                {{ ms }}ms
+              {% endif %}
+            {% else %}
+              <span class="dim">—</span>
+            {% endif %}
+          </td>
+
+          {# Created #}
+          <td class="col-date">
+            {{ (run.created_at or '')[:16] | replace("T"," ") }}
+          </td>
+
+          {# Action #}
+          <td class="col-action">
+            <a class="btn btn-ghost btn-xs" href="/dashboard/run/{{ run.task_id }}">View →</a>
           </td>
         </tr>
       {% endfor %}
@@ -107,26 +264,43 @@
 {% if pages > 1 %}
 <nav class="pagination">
   {% set bq %}status={{ f_status }}&model={{ f_model }}&provider={{ f_provider }}&passed={{ f_passed }}{% endset %}
+
+  {# Prev #}
   {% if page > 1 %}
-    <a class="page-btn" href="/dashboard?{{ bq }}&page={{ page - 1 }}">&laquo; Prev</a>
+    <a class="page-btn" href="/dashboard?{{ bq }}&page={{ page - 1 }}">← Prev</a>
   {% else %}
-    <span class="page-btn disabled">&laquo; Prev</span>
+    <span class="page-btn disabled">← Prev</span>
   {% endif %}
-  <span class="page-info">Page {{ page }} of {{ pages }}</span>
+
+  {# Page numbers (show up to 7 around current) #}
+  <div class="page-numbers">
+    {% for p in range(1, pages + 1) %}
+      {% if p == 1 or p == pages or (p >= page - 2 and p <= page + 2) %}
+        <a class="page-number {% if p == page %}active{% endif %}"
+           href="/dashboard?{{ bq }}&page={{ p }}">{{ p }}</a>
+      {% elif p == page - 3 or p == page + 3 %}
+        <span class="page-number" style="pointer-events:none;border:none;color:var(--text-dim)">…</span>
+      {% endif %}
+    {% endfor %}
+  </div>
+
+  {# Next #}
   {% if page < pages %}
-    <a class="page-btn" href="/dashboard?{{ bq }}&page={{ page + 1 }}">Next &raquo;</a>
+    <a class="page-btn" href="/dashboard?{{ bq }}&page={{ page + 1 }}">Next →</a>
   {% else %}
-    <span class="page-btn disabled">Next &raquo;</span>
+    <span class="page-btn disabled">Next →</span>
   {% endif %}
 </nav>
 {% endif %}
 
 {% else %}
 <div class="empty-state">
+  <div class="empty-state-icon">⬡</div>
   <p>No runs found{% if f_status or f_model or f_provider or f_passed %} matching current filters{% endif %}.</p>
   {% if f_status or f_model or f_provider or f_passed %}
     <a href="/dashboard" class="btn btn-secondary">Clear filters</a>
   {% endif %}
 </div>
 {% endif %}
+
 {% endblock %}
