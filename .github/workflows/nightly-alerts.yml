@@ -1,0 +1,81 @@
+# Nightly Alerts workflow — A12
+#
+# Triggered automatically when the nightly regression workflow finishes.
+# Sends a generic JSON webhook payload to ALERT_WEBHOOK_URL.
+# This is NOT pre-formatted for any specific channel (Slack, Teams, PagerDuty, etc.).
+# To route to those services, point ALERT_WEBHOOK_URL at an adapter/relay,
+# or extend nightly_alert.py with channel-specific formatting in a future ticket.
+#
+# Required secret:  ALERT_WEBHOOK_URL
+# Optional variable: ALERT_ON_SUCCESS (default: false)
+
+name: Nightly Alerts
+
+on:
+  workflow_run:
+    workflows:
+      - Nightly Regression
+      - nightly-regression
+    types:
+      - completed
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  send-nightly-alert:
+    runs-on: ubuntu-latest
+    steps:
+      # ── Checkout required: nightly_alert.py lives in the repo ──────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Download regression summary artifact (optional)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/nightly-alert
+          artifacts_json="/tmp/nightly-alert/artifacts.json"
+
+          curl -sS -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${REPO}/actions/runs/${RUN_ID}/artifacts" \
+            > "${artifacts_json}"
+
+          artifact_id="$(jq -r '.artifacts[]? | select(.name=="regression-summary") | .id' \
+            "${artifacts_json}" | head -n1 || true)"
+          if [ -z "${artifact_id}" ]; then
+            echo "No 'regression-summary' artifact found. Continuing."
+            exit 0
+          fi
+
+          curl -sS -L -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${REPO}/actions/artifacts/${artifact_id}/zip" \
+            -o /tmp/nightly-alert/regression-summary.zip
+
+          unzip -o /tmp/nightly-alert/regression-summary.zip \
+            -d /tmp/nightly-alert >/dev/null
+          ls -la /tmp/nightly-alert
+
+      - name: Send alert webhook (non-fatal)
+        env:
+          ALERT_WEBHOOK_URL: ${{ secrets.ALERT_WEBHOOK_URL }}
+          ALERT_ON_SUCCESS: ${{ vars.ALERT_ON_SUCCESS || 'false' }}
+          NIGHTLY_STATUS: ${{ github.event.workflow_run.conclusion }}
+          ALERT_TIMESTAMP: ${{ github.event.workflow_run.updated_at }}
+          GITHUB_RUN_URL: ${{ github.event.workflow_run.html_url }}
+          WORKFLOW_NAME: ${{ github.event.workflow_run.name }}
+          ALERT_SUMMARY_FILE: /tmp/nightly-alert/regression-summary.json
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_RUN_ID: ${{ github.event.workflow_run.id }}
+        run: python3 .github/scripts/nightly_alert.py
