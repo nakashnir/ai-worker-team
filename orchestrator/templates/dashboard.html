@@ -39,8 +39,14 @@
     <div class="summary-sub">this page</div>
   </div>
 
-  {# Passed (exact_match = 100%) #}
-  {% set passed_count = runs | selectattr("metrics") | selectattr("metrics.passed", "equalto", true) | list | length %}
+  {# Passed — use namespace counter; selectattr("metrics.passed") is unsafe on plain dicts #}
+  {% set ns_pc = namespace(count=0) %}
+  {% for run in runs %}
+    {% if run.metrics and run.metrics.get("passed") %}
+      {% set ns_pc.count = ns_pc.count + 1 %}
+    {% endif %}
+  {% endfor %}
+  {% set passed_count = ns_pc.count %}
   <div class="summary-card card-passed">
     <div class="summary-label">Passed</div>
     <div class="summary-value" style="color:#a78bfa;">{{ passed_count }}</div>
@@ -51,12 +57,14 @@
   <div class="summary-card card-nightly">
     <div class="summary-label">Last Run</div>
     {% if nightly and nightly.available %}
-      {% set ns = nightly %}
-      <div class="summary-value nightly-status-{{ ns.status }}">
-        {{ ns.status | upper }}
+      {% set ns              = nightly %}
+      {% set ns_status       = ns.get("status") %}
+      {% set ns_completed_at = ns.get("completed_at") %}
+      <div class="summary-value nightly-status-{{ ns_status }}">
+        {{ ns_status | upper }}
       </div>
       <div class="summary-sub">
-        {% if ns.completed_at %}{{ ns.completed_at[:16] | replace("T"," ") }} UTC{% endif %}
+        {% if ns_completed_at %}{{ ns_completed_at[:16] | replace("T"," ") }} UTC{% endif %}
       </div>
     {% else %}
       <div class="summary-value nightly-status-unknown">—</div>
@@ -69,34 +77,38 @@
 {# ── Nightly detail block ── #}
 {% if nightly and nightly.available %}
   {% set ns = nightly %}
-  {% set ns_metrics = ns.metrics or {} %}
-  {% set ns_exact_match_rate = ns_metrics.get('exact_match_rate') %}
-  {% set ns_nonempty_rate = ns_metrics.get('nonempty_rate') %}
-  {% set ns_elapsed_ms_total = ns_metrics.get('elapsed_ms_total') %}
+  {# Safe extractions — nightly is a plain dict; absent keys raise UndefinedError on dot-access #}
+  {% set ns_em           = ns.get("exact_match_rate") %}
+  {% set ns_ne           = ns.get("nonempty_rate") %}
+  {% set ns_elapsed      = ns.get("elapsed_ms_total") %}
+  {% set ns_status       = ns.get("status") %}
+  {% set ns_completed_at = ns.get("completed_at") %}
+  {% set ns_model        = ns.get("model") %}
+  {% set ns_task_id      = ns.get("task_id") %}
   <div class="nightly-block">
     <span class="nightly-block-label">◆ Last Run</span>
-    <span class="nightly-block-status nightly-status-{{ ns.status }}">
-      {{ ns.status | upper }}
+    <span class="nightly-block-status nightly-status-{{ ns_status }}">
+      {{ ns_status | upper }}
     </span>
     <div class="nightly-block-meta">
-      {% if ns.model %}
-        <span><span class="meta-key">model</span> {{ ns.model | truncate(40, true, "…") }}</span>
+      {% if ns_model %}
+        <span><span class="meta-key">model</span> {{ ns_model | truncate(40, true, "…") }}</span>
       {% endif %}
-      {% if ns_exact_match_rate is not none %}
-        <span><span class="meta-key">em</span> {{ "%.1f"|format(ns_exact_match_rate * 100) }}%</span>
+      {% if ns_em is not none %}
+        <span><span class="meta-key">em</span> {{ "%.1f"|format(ns_em * 100) }}%</span>
       {% endif %}
-      {% if ns_nonempty_rate is not none %}
-        <span><span class="meta-key">nonempty</span> {{ "%.1f"|format(ns_nonempty_rate * 100) }}%</span>
+      {% if ns_ne is not none %}
+        <span><span class="meta-key">nonempty</span> {{ "%.1f"|format(ns_ne * 100) }}%</span>
       {% endif %}
-      {% if ns_elapsed_ms_total is not none %}
-        <span><span class="meta-key">elapsed</span> {{ ns_elapsed_ms_total }}ms</span>
+      {% if ns_elapsed is not none %}
+        <span><span class="meta-key">elapsed</span> {{ ns_elapsed }}ms</span>
       {% endif %}
-      {% if ns.completed_at %}
-        <span><span class="meta-key">at</span> {{ ns.completed_at[:19] | replace("T"," ") }} UTC</span>
+      {% if ns_completed_at %}
+        <span><span class="meta-key">at</span> {{ ns_completed_at[:19] | replace("T"," ") }} UTC</span>
       {% endif %}
     </div>
-    {% if ns.task_id %}
-      <a class="btn btn-ghost btn-sm nightly-block-link" href="/dashboard/run/{{ ns.task_id }}">View run →</a>
+    {% if ns_task_id %}
+      <a class="btn btn-ghost btn-sm nightly-block-link" href="/dashboard/run/{{ ns_task_id }}">View run →</a>
     {% endif %}
   </div>
 {% endif %}
@@ -173,6 +185,7 @@
   <table class="data-table runs-table">
     <thead>
       <tr>
+        <th class="col-check" title="Select up to 2 runs to compare">⬡</th>
         <th>Task ID</th>
         <th>Status</th>
         <th>Model</th>
@@ -185,11 +198,17 @@
     </thead>
     <tbody>
       {% for run in runs %}
-        {% set m = run.metrics or {} %}
-        {% set em = m.get('exact_match_rate') %}
-        {% set total_samples = m.get('total') %}
-        {% set elapsed_ms_total = m.get('elapsed_ms_total') %}
+        {% set m         = run.metrics or {} %}
+        {% set em        = m.get("exact_match_rate") %}
+        {% set m_total   = m.get("total") %}
+        {% set m_elapsed = m.get("elapsed_ms_total") %}
         <tr class="run-row run-status-{{ run.status or 'unknown' }}">
+
+          {# Compare checkbox #}
+          <td class="col-check">
+            <input type="checkbox" class="cmp-check" value="{{ run.task_id }}"
+                   aria-label="Select for compare">
+          </td>
 
           {# Task ID #}
           <td>
@@ -227,12 +246,12 @@
           </td>
 
           {# Samples #}
-          <td class="col-metric">{{ total_samples if total_samples is not none else '—' }}</td>
+          <td class="col-metric">{{ m_total if m_total is not none else '—' }}</td>
 
           {# Elapsed #}
           <td class="col-metric">
-            {% if elapsed_ms_total is not none %}
-              {% set ms = elapsed_ms_total | int %}
+            {% if m_elapsed is not none %}
+              {% set ms = m_elapsed | int %}
               {% if ms >= 60000 %}
                 {{ (ms / 60000) | round(1) }}m
               {% elif ms >= 1000 %}
@@ -292,6 +311,17 @@
   {% endif %}
 </nav>
 {% endif %}
+
+{# ── Floating compare toolbar (shown by JS when 2 checkboxes selected) ── #}
+<div id="compare-toolbar" class="compare-toolbar" hidden>
+  <span class="compare-toolbar-label">
+    <span id="cmp-count">0</span> runs selected
+  </span>
+  <a id="compare-toolbar-btn" class="btn btn-primary btn-sm" href="/dashboard/compare">
+    Compare →
+  </a>
+  <button class="btn btn-secondary btn-sm" onclick="clearCompare()">Clear</button>
+</div>
 
 {% else %}
 <div class="empty-state">
