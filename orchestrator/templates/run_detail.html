@@ -12,6 +12,10 @@
   <span class="current mono">{{ run.task_id[:8] }}…</span>
   <span class="sep">·</span>
   <span class="status-badge status-{{ run.status or 'unknown' }}">{{ run.status or '—' }}</span>
+  <span class="sep" style="margin-left:auto;"></span>
+  <a class="btn btn-ghost btn-xs" href="/dashboard/compare?left={{ run.task_id }}" style="margin-left:auto;">
+    Compare with… →
+  </a>
 </nav>
 
 {# ── Run hero card ── #}

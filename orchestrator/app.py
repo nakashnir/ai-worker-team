@@ -699,6 +699,132 @@ def dashboard_run(
     )
 
 
+# ═════════════════════════════════════════════════════════════════
+# A11  —  Compare runs  (NEW; nothing above changed)
+# ═════════════════════════════════════════════════════════════════
+
+def _fetch_run_for_compare(task_id: str) -> dict | None:
+    """
+    Fetch a single eval_run row + coerce it.
+    Returns None if not found. Never raises.
+    """
+    try:
+        rows = _exec_query(
+            """
+            SELECT task_id, dataset_path, model, scorers, status, metrics,
+                   created_at, completed_at
+            FROM   eval_runs
+            WHERE  task_id = %s
+            """,
+            [task_id],
+        )
+        if not rows:
+            return None
+        return _coerce_run_row(rows[0])
+    except Exception:
+        return None
+
+
+def _compare_runs(left: dict, right: dict) -> dict:
+    """
+    Derive the comparison summary between two coerced run rows.
+    All fields safe — missing metrics fall back to None.
+    """
+    lm = left.get("metrics") or {}
+    rm = right.get("metrics") or {}
+
+    l_em  = lm.get("exact_match_rate")
+    r_em  = rm.get("exact_match_rate")
+    l_pas = lm.get("passed")
+    r_pas = rm.get("passed")
+
+    # EM delta
+    em_delta: float | None = None
+    if l_em is not None and r_em is not None:
+        em_delta = round(r_em - l_em, 4)
+
+    # Regression / Improvement / No change verdict
+    verdict = "no_change"
+    if em_delta is not None:
+        if em_delta < -0.0001:
+            verdict = "regression"
+        elif em_delta > 0.0001:
+            verdict = "improvement"
+
+    return {
+        "em_delta":         em_delta,
+        "l_em":             l_em,
+        "r_em":             r_em,
+        "l_passed":         l_pas,
+        "r_passed":         r_pas,
+        "passed_changed":   l_pas != r_pas,
+        "status_changed":   left.get("status") != right.get("status"),
+        "model_same":       left.get("model") == right.get("model"),
+        "verdict":          verdict,           # regression | improvement | no_change
+    }
+
+
+@app.get("/dashboard/compare", response_class=HTMLResponse, tags=["dashboard"])
+def dashboard_compare(
+    request: Request,
+    left:    Optional[str] = Query(default=None, description="Left (baseline) task_id"),
+    right:   Optional[str] = Query(default=None, description="Right (candidate) task_id"),
+):
+    """
+    Side-by-side comparison of two eval runs.
+    Shows delta in exact_match_rate + regression / improvement badge.
+    """
+    nightly = _last_nightly_summary()
+    errors:  list[str] = []
+
+    left_run  = None
+    right_run = None
+    cmp:      dict | None = None
+
+    if left and right:
+        left_run  = _fetch_run_for_compare(left)
+        right_run = _fetch_run_for_compare(right)
+        if left_run is None:
+            errors.append(f"Run '{left[:8]}…' not found.")
+        if right_run is None:
+            errors.append(f"Run '{right[:8]}…' not found.")
+        if left_run and right_run:
+            cmp = _compare_runs(left_run, right_run)
+    elif left or right:
+        errors.append("Provide both left= and right= task IDs to compare.")
+
+    # Recent runs for the picker dropdowns (last 50)
+    recent_runs = []
+    try:
+        recent_runs = _exec_query(
+            """
+            SELECT task_id, model, status, metrics, completed_at
+            FROM   eval_runs
+            ORDER  BY COALESCE(completed_at, created_at) DESC
+            LIMIT  50
+            """,
+            [],
+        )
+        recent_runs = [_coerce_run_row(r) for r in recent_runs]
+    except Exception:
+        pass
+
+    return templates.TemplateResponse(
+        "compare.html",
+        {
+            "request":     request,
+            "left_id":     left  or "",
+            "right_id":    right or "",
+            "left_run":    left_run,
+            "right_run":   right_run,
+            "cmp":         cmp,
+            "errors":      errors,
+            "recent_runs": recent_runs,
+            "nightly":     nightly,
+        },
+    )
+
+
 # ─────────────────────────────────────────────────────────────────
 # Entry point
 # ─────────────────────────────────────────────────────────────────

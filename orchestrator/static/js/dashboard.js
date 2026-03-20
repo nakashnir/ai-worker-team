@@ -110,3 +110,58 @@
   });
 
 })();
+
+/* ── A11: Compare checkbox logic ── */
+(function () {
+
+  var checkboxes = Array.from(document.querySelectorAll('.cmp-check'));
+  if (!checkboxes.length) return;
+
+  var toolbar    = document.getElementById('compare-toolbar');
+  var countEl    = document.getElementById('cmp-count');
+  var compareBtn = document.getElementById('compare-toolbar-btn');
+
+  function getSelected() {
+    return checkboxes.filter(function (c) { return c.checked; });
+  }
+
+  function updateToolbar() {
+    var sel = getSelected();
+    var n   = sel.length;
+    if (countEl) countEl.textContent = n;
+
+    if (n >= 2 && toolbar) {
+      toolbar.hidden = false;
+      var ids = sel.slice(0, 2).map(function (c) { return c.value; });
+      if (compareBtn) {
+        compareBtn.href =
+          '/dashboard/compare?left=' + encodeURIComponent(ids[0]) +
+          '&right=' + encodeURIComponent(ids[1]);
+      }
+    } else if (toolbar) {
+      toolbar.hidden = true;
+    }
+
+    /* Prevent selecting more than 2 */
+    checkboxes.forEach(function (c) {
+      if (!c.checked && n >= 2) {
+        c.disabled = true;
+        c.parentElement.title = 'Deselect a run first';
+      } else {
+        c.disabled = false;
+        c.parentElement.title = '';
+      }
+    });
+  }
+
+  checkboxes.forEach(function (c) {
+    c.addEventListener('change', updateToolbar);
+  });
+
+  /* Global clear helper called by toolbar Reset button */
+  window.clearCompare = function () {
+    checkboxes.forEach(function (c) { c.checked = false; c.disabled = false; });
+    if (toolbar) toolbar.hidden = true;
+  };
+
+})();

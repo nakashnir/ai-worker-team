@@ -1,0 +1,305 @@
+{% extends "base.html" %}
+{% block title %}Compare Runs — EvalOps{% endblock %}
+
+{% block content %}
+
+{# ── Breadcrumb ── #}
+<nav class="breadcrumb">
+  <a href="/dashboard">Runs</a>
+  <span class="sep">›</span>
+  <span class="current">Compare</span>
+  {% if left_id and right_id %}
+    <span class="sep">·</span>
+    <span class="mono" style="color:var(--text-dim);">
+      {{ left_id[:8] }}… vs {{ right_id[:8] }}…
+    </span>
+  {% endif %}
+</nav>
+
+{# ── Page title ── #}
+<div class="page-header" style="margin-bottom:1.25rem;">
+  <div class="page-title-group">
+    <h1>Compare Runs</h1>
+  </div>
+  <a class="btn btn-secondary btn-sm" href="/dashboard/compare">New comparison</a>
+</div>
+
+{# ── Errors ── #}
+{% if errors %}
+  {% for e in errors %}
+    <div class="error-callout" style="margin-bottom:.75rem;">
+      <div class="error-callout-header"><span>✗</span> Error</div>
+      <div class="error-callout-body">{{ e }}</div>
+    </div>
+  {% endfor %}
+{% endif %}
+
+{# ── Picker form ── #}
+<div class="compare-picker-card">
+  <div class="compare-picker-label">Select two runs to compare</div>
+  <form class="compare-form" method="get" action="/dashboard/compare">
+    <div class="compare-form-row">
+
+      <div class="compare-form-col">
+        <label class="filter-row-label">Baseline (Left)</label>
+        <select name="left" class="compare-select">
+          <option value="">— choose run —</option>
+          {% for r in recent_runs %}
+            {% set m = r.metrics or {} %}
+            <option value="{{ r.task_id }}"
+              {% if r.task_id == left_id %}selected{% endif %}>
+              {{ r.task_id[:8] }}…
+              · {{ r.status }}
+              {% if m.exact_match_rate is not none %}· EM {{ "%.0f"|format(m.exact_match_rate * 100) }}%{% endif %}
+              · {{ (r.completed_at or r.created_at or '')[:10] }}
+            </option>
+          {% endfor %}
+        </select>
+        {% if left_id %}
+          <div class="compare-form-hint mono">{{ left_id }}</div>
+        {% endif %}
+      </div>
+
+      <div class="compare-vs-divider">VS</div>
+
+      <div class="compare-form-col">
+        <label class="filter-row-label">Candidate (Right)</label>
+        <select name="right" class="compare-select">
+          <option value="">— choose run —</option>
+          {% for r in recent_runs %}
+            {% set m = r.metrics or {} %}
+            <option value="{{ r.task_id }}"
+              {% if r.task_id == right_id %}selected{% endif %}>
+              {{ r.task_id[:8] }}…
+              · {{ r.status }}
+              {% if m.exact_match_rate is not none %}· EM {{ "%.0f"|format(m.exact_match_rate * 100) }}%{% endif %}
+              · {{ (r.completed_at or r.created_at or '')[:10] }}
+            </option>
+          {% endfor %}
+        </select>
+        {% if right_id %}
+          <div class="compare-form-hint mono">{{ right_id }}</div>
+        {% endif %}
+      </div>
+
+      <div class="compare-form-actions">
+        <button type="submit" class="btn btn-primary">Compare →</button>
+      </div>
+    </div>
+  </form>
+</div>
+
+{# ── Compare result ── #}
+{% if left_run and right_run and cmp %}
+
+  {# Verdict banner #}
+  {% if cmp.verdict == "regression" %}
+    <div class="verdict-banner verdict-regression">
+      <span class="verdict-icon">▼</span>
+      <div>
+        <div class="verdict-title">Regression Detected</div>
+        <div class="verdict-sub">
+          Exact-match rate dropped by
+          <strong>{{ "%.2f"|format(cmp.em_delta * 100 | abs) }}pp</strong>
+          from {{ "%.1f"|format(cmp.l_em * 100) }}% to {{ "%.1f"|format(cmp.r_em * 100) }}%.
+        </div>
+      </div>
+    </div>
+  {% elif cmp.verdict == "improvement" %}
+    <div class="verdict-banner verdict-improvement">
+      <span class="verdict-icon">▲</span>
+      <div>
+        <div class="verdict-title">Improvement</div>
+        <div class="verdict-sub">
+          Exact-match rate improved by
+          <strong>+{{ "%.2f"|format(cmp.em_delta * 100) }}pp</strong>
+          from {{ "%.1f"|format(cmp.l_em * 100) }}% to {{ "%.1f"|format(cmp.r_em * 100) }}%.
+        </div>
+      </div>
+    </div>
+  {% else %}
+    <div class="verdict-banner verdict-nochange">
+      <span class="verdict-icon">≈</span>
+      <div>
+        <div class="verdict-title">No Material Change</div>
+        <div class="verdict-sub">
+          {% if cmp.l_em is not none and cmp.r_em is not none %}
+            Both runs at {{ "%.1f"|format(cmp.l_em * 100) }}% exact-match rate.
+          {% else %}
+            Exact-match rates unavailable or equal.
+          {% endif %}
+        </div>
+      </div>
+    </div>
+  {% endif %}
+
+  {# ── Delta summary row ── #}
+  <div class="delta-row">
+
+    <div class="delta-card">
+      <div class="delta-label">EM Rate Δ</div>
+      {% if cmp.em_delta is not none %}
+        <div class="delta-value {% if cmp.em_delta > 0.0001 %}delta-pos{% elif cmp.em_delta < -0.0001 %}delta-neg{% else %}delta-neutral{% endif %}">
+          {% if cmp.em_delta > 0.0001 %}+{% endif %}{{ "%.2f"|format(cmp.em_delta * 100) }}pp
+        </div>
+      {% else %}
+        <div class="delta-value delta-neutral">—</div>
+      {% endif %}
+    </div>
+
+    <div class="delta-card">
+      <div class="delta-label">Passed</div>
+      <div class="delta-value {% if cmp.passed_changed %}delta-warn{% else %}delta-neutral{% endif %}">
+        {% if cmp.passed_changed %}Changed{% else %}Same{% endif %}
+      </div>
+    </div>
+
+    <div class="delta-card">
+      <div class="delta-label">Status</div>
+      <div class="delta-value {% if cmp.status_changed %}delta-warn{% else %}delta-neutral{% endif %}">
+        {% if cmp.status_changed %}Changed{% else %}Same{% endif %}
+      </div>
+    </div>
+
+    <div class="delta-card">
+      <div class="delta-label">Model</div>
+      <div class="delta-value {% if not cmp.model_same %}delta-warn{% else %}delta-neutral{% endif %}">
+        {% if cmp.model_same %}Same{% else %}Different{% endif %}
+      </div>
+    </div>
+
+  </div>
+
+  {# ── Side-by-side run cards ── #}
+  <div class="compare-grid">
+
+    {% for side_label, run, run_id in [
+        ("Baseline", left_run,  left_id),
+        ("Candidate", right_run, right_id)
+    ] %}
+    {% set m = run.metrics or {} %}
+    <div class="compare-run-card
+      {% if loop.index == 1 %}compare-left{% else %}compare-right{% endif %}
+      {% if loop.index == 1 and cmp.verdict == 'regression' %}compare-worse{% endif %}
+      {% if loop.index == 2 and cmp.verdict == 'regression' %}compare-better{% endif %}
+      {% if loop.index == 1 and cmp.verdict == 'improvement' %}compare-better{% endif %}
+      {% if loop.index == 2 and cmp.verdict == 'improvement' %}compare-worse{% endif %}
+    ">
+      <div class="compare-card-header">
+        <span class="compare-side-label">{{ side_label }}</span>
+        <span class="status-badge status-{{ run.status or 'unknown' }}">{{ run.status or '—' }}</span>
+        {% if m.passed is not none %}
+          <span class="status-badge {% if m.passed %}status-done{% else %}status-failed{% endif %}">
+            {{ "PASS" if m.passed else "FAIL" }}
+          </span>
+        {% endif %}
+      </div>
+
+      <div class="compare-task-id mono">
+        <a href="/dashboard/run/{{ run.task_id }}" title="{{ run.task_id }}">
+          {{ run.task_id[:16] }}…
+        </a>
+      </div>
+
+      <table class="compare-meta-table">
+        <tbody>
+          <tr>
+            <th>Model</th>
+            <td>
+              <code>{{ run.model or '—' }}</code>
+              {% if not cmp.model_same %}
+                <span class="changed-tag">changed</span>
+              {% endif %}
+            </td>
+          </tr>
+          <tr>
+            <th>Dataset</th>
+            <td><code>{{ run.dataset_path or '—' }}</code></td>
+          </tr>
+          <tr class="{% if cmp.em_delta is not none and ((loop.index == 1 and cmp.em_delta < -0.0001) or (loop.index == 2 and cmp.em_delta > 0.0001)) %}compare-row-highlight-good{% elif cmp.em_delta is not none and ((loop.index == 1 and cmp.em_delta > 0.0001) or (loop.index == 2 and cmp.em_delta < -0.0001)) %}compare-row-highlight-bad{% endif %}">
+            <th>Exact Match</th>
+            <td class="mono">
+              {% if m.exact_match_rate is not none %}
+                <strong>{{ "%.2f"|format(m.exact_match_rate * 100) }}%</strong>
+                <div class="rate-track" style="margin-top:4px;width:100%;max-width:160px;">
+                  {% set pct = m.exact_match_rate * 100 %}
+                  <div class="rate-fill {% if pct == 100 %}{% elif pct >= 50 %}rate-partial{% else %}rate-zero{% endif %}"
+                       style="width:{{ pct }}%"></div>
+                </div>
+              {% else %}<span class="dim">—</span>{% endif %}
+            </td>
+          </tr>
+          <tr>
+            <th>Contains Exp.</th>
+            <td class="mono">
+              {% if m.contains_expected_rate is not none %}
+                {{ "%.2f"|format(m.contains_expected_rate * 100) }}%
+              {% else %}<span class="dim">—</span>{% endif %}
+            </td>
+          </tr>
+          <tr>
+            <th>Non-empty</th>
+            <td class="mono">
+              {% if m.nonempty_rate is not none %}
+                {{ "%.2f"|format(m.nonempty_rate * 100) }}%
+              {% else %}<span class="dim">—</span>{% endif %}
+            </td>
+          </tr>
+          <tr>
+            <th>Samples</th>
+            <td class="mono">{{ m.total if m.total is not none else '—' }}</td>
+          </tr>
+          <tr>
+            <th>Elapsed</th>
+            <td class="mono">
+              {% if m.elapsed_ms_total is not none %}
+                {% set ms = m.elapsed_ms_total | int %}
+                {% if ms >= 60000 %}{{ (ms / 60000) | round(2) }}m
+                {% elif ms >= 1000 %}{{ (ms / 1000) | round(2) }}s
+                {% else %}{{ ms }}ms{% endif %}
+              {% else %}<span class="dim">—</span>{% endif %}
+            </td>
+          </tr>
+          <tr>
+            <th>Retries</th>
+            <td class="mono">{{ m.retries_count if m.retries_count is not none else '—' }}</td>
+          </tr>
+          <tr>
+            <th>Created</th>
+            <td class="mono" style="font-size:.75rem;color:var(--text-muted);">
+              {{ (run.created_at or '')[:19] | replace("T"," ") }}
+            </td>
+          </tr>
+          <tr>
+            <th>Completed</th>
+            <td class="mono" style="font-size:.75rem;color:var(--text-muted);">
+              {{ (run.completed_at or '')[:19] | replace("T"," ") or '—' }}
+            </td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div style="margin-top:.875rem;">
+        <a class="btn btn-ghost btn-sm" href="/dashboard/run/{{ run.task_id }}">
+          View full run →
+        </a>
+      </div>
+    </div>
+    {% endfor %}
+
+  </div>{# /compare-grid #}
+
+{% elif left_id or right_id %}
+  {# Partial — already shown errors above #}
+{% else %}
+  {# Empty state — no task IDs provided yet #}
+  <div class="empty-state" style="padding-top:2rem;">
+    <div class="empty-state-icon">⬡</div>
+    <p>Select two runs above to compare them side-by-side.</p>
+    <p style="margin-top:.5rem;font-size:.8rem;color:var(--text-dim);">
+      You can also click <strong>Compare</strong> from the runs table or a run detail page.
+    </p>
+  </div>
+{% endif %}
+
+{% endblock %}
