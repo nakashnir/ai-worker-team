@@ -14,6 +14,8 @@ name: Nightly Alerts
 on:
   workflow_run:
     workflows:
+      - Nightly Eval
+      - nightly-eval
       - Nightly Regression
       - nightly-regression
     types:
