@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-.github/scripts/nightly_alert.py — A12 nightly alert sender.
+.github/scripts/nightly_alert.py — A12 nightly alert sender (A12.1: Discord support).
 
-Sends a generic JSON webhook POST when a nightly regression run finishes.
-This script is NOT channel-specific: it posts plain JSON to ALERT_WEBHOOK_URL.
-To deliver to Slack / Teams / PagerDuty / Discord, route ALERT_WEBHOOK_URL
-through an adapter or extend this script in a future ticket.
+Default behavior: posts a generic JSON payload to ALERT_WEBHOOK_URL.
+Discord behavior: if ALERT_WEBHOOK_URL contains "discord.com/api/webhooks",
+  posts a Discord-compatible {"content": "..."} payload instead.
+All other endpoints continue to receive the generic JSON payload unchanged.
 
 Env vars consumed (all optional except ALERT_WEBHOOK_URL):
   ALERT_WEBHOOK_URL   Webhook endpoint. If absent, alert is skipped (non-fatal).
@@ -78,6 +78,57 @@ def _first_non_empty(*values):
             continue
         return v
     return None
+
+
+# ─────────────────────────────────────────────────────────────────
+# Discord support (A12.1)
+# ─────────────────────────────────────────────────────────────────
+
+def _is_discord_url(url: str) -> bool:
+    """Return True if url is a Discord webhook endpoint."""
+    return "discord.com/api/webhooks" in url.lower()
+
+
+def _build_discord_payload(data: dict) -> dict:
+    """
+    Build a Discord-compatible payload from the generic data dict.
+    Discord requires {"content": "<string>"} at minimum.
+    Uses plain text — no embeds — to keep it simple and reliable.
+    """
+    pass_fail   = str(data.get("pass_fail", "unknown")).upper()
+    status      = str(data.get("status",    "unknown"))
+    icon        = "✅" if pass_fail == "PASS" else "❌"
+
+    lines = [f"{icon} **Nightly Eval — {pass_fail}** (status: `{status}`)"]
+
+    task_id = data.get("task_id")
+    if task_id:
+        lines.append(f"task: `{task_id}`")
+
+    model = data.get("model")
+    if model:
+        lines.append(f"model: `{model}`")
+
+    dataset = data.get("dataset_path")
+    if dataset:
+        lines.append(f"dataset: `{dataset}`")
+
+    em = data.get("exact_match_rate")
+    if em is not None:
+        try:
+            lines.append(f"exact match: `{float(em) * 100:.1f}%`")
+        except (TypeError, ValueError):
+            lines.append(f"exact match: `{em}`")
+
+    ts = data.get("timestamp")
+    if ts:
+        lines.append(f"at: `{str(ts)[:19].replace('T', ' ')} UTC`")
+
+    run_url = data.get("github_run_url")
+    if run_url:
+        lines.append(f"run: {run_url}")
+
+    return {"content": "\n".join(lines)}
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -177,7 +228,12 @@ def main() -> int:
         return 0
 
     print(f"[nightly-alert] sending alert for status={status!r} ...")
-    _post_json(webhook_url, payload)
+    if _is_discord_url(webhook_url):
+        print("[nightly-alert] Discord webhook detected — using Discord payload format.")
+        outgoing = _build_discord_payload(payload)
+    else:
+        outgoing = payload
+    _post_json(webhook_url, outgoing)
     # Non-fatal by design: alerting must never block the nightly workflow.
     return 0
 
