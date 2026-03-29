@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-.github/scripts/nightly_alert.py — A12 nightly alert sender (A12.1: Discord support).
+.github/scripts/nightly_alert.py — A12 nightly alert sender (A12.2: explicit HTTP headers).
 
 Default behavior: posts a generic JSON payload to ALERT_WEBHOOK_URL.
 Discord behavior: if ALERT_WEBHOOK_URL contains "discord.com/api/webhooks",
@@ -186,13 +186,18 @@ def _should_send(status: str, alert_on_success: bool) -> bool:
 def _post_json(url: str, payload: dict) -> None:
     """
     POST payload as JSON to url.
+    Sends explicit User-Agent, Accept, and Content-Type headers.
     Logs warnings on failure; never raises — alerting is non-fatal.
     """
     body = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(
         url=url,
         data=body,
-        headers={"Content-Type": "application/json"},
+        headers={
+            "Content-Type": "application/json",
+            "Accept":       "application/json",
+            "User-Agent":   "EvalOpsNightlyAlerts/1.0 (+https://github.com/nakashnir/ai-worker-team)",
+        },
         method="POST",
     )
     try:
