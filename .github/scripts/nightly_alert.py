@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-.github/scripts/nightly_alert.py — A12 nightly alert sender (A12.2: explicit HTTP headers).
+.github/scripts/nightly_alert.py — A12 nightly alert sender (A12.4: workflow-conclusion-wins pass/fail).
 
 Default behavior: posts a generic JSON payload to ALERT_WEBHOOK_URL.
 Discord behavior: if ALERT_WEBHOOK_URL contains "discord.com/api/webhooks",
@@ -144,11 +144,21 @@ def _build_payload() -> dict:
         "unknown",
     )
 
-    pass_fail = _first_non_empty(
-        os.getenv("PASS_FAIL"),
-        summary.get("pass_fail"),
-        "fail" if str(status).lower() not in {"success", "done"} else "pass",
-    )
+    # A12.4: workflow conclusion is the source of truth for top-level pass/fail.
+    # The summary artifact may reflect an earlier successful eval step even when
+    # the overall workflow conclusion is failure (e.g. a later step failed).
+    # Rule: if the workflow conclusion is not success/done, pass_fail is always
+    # "fail" — the summary's pass_fail is only trusted on a clean conclusion.
+    _status_lower = str(status).strip().lower()
+    _workflow_succeeded = _status_lower in {"success", "done"}
+    if _workflow_succeeded:
+        pass_fail = _first_non_empty(
+            os.getenv("PASS_FAIL"),
+            summary.get("pass_fail"),
+            "pass",
+        )
+    else:
+        pass_fail = "fail"
 
     payload: dict = {
         "event":             "nightly_regression",
