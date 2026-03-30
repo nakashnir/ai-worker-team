@@ -89,6 +89,23 @@ jobs:
           chmod +x scripts/run_nightly_local.sh
           ./scripts/run_nightly_local.sh
 
+      # ── A12.3: generate + upload regression-summary for alerts ──────────
+      - name: Generate regression-summary artifact
+        if: always()
+        shell: bash
+        env:
+          RUN_DATE: "${{ github.run_id }}"
+          DATASET:  "shared/datasets/sample_eval_valid_v1.jsonl"
+        run: python3 .github/scripts/make_regression_summary.py
+
+      - name: Upload regression-summary artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: regression-summary
+          path: "artifacts/nightly/${{ github.run_id }}/regression-summary.json"
+          retention-days: 7
+
       - name: Upload nightly artifacts
         if: always()
         uses: actions/upload-artifact@v4
