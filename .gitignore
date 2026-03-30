@@ -21,7 +21,10 @@ tmp_upload/
 # Runtime outputs
 shared/runs/*
 shared/reports/*
+shared/docs/*
+artifacts/nightly/*
 
 # Keep runtime directories
 !shared/runs/.gitkeep
 !shared/reports/.gitkeep
+!shared/docs/.gitkeep

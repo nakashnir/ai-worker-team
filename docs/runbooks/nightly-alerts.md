@@ -166,7 +166,7 @@ gh run watch
 ### 4 — Smoke-test the script locally
 
 ```bash
-cd /home/administrator/ai-worker-team
+cd /path/to/ai-worker-team-repo
 
 # Test: no webhook configured — must exit 0
 python3 .github/scripts/nightly_alert.py

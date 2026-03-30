@@ -206,7 +206,7 @@ def _post_json(url: str, payload: dict) -> None:
         headers={
             "Content-Type": "application/json",
             "Accept":       "application/json",
-            "User-Agent":   "EvalOpsNightlyAlerts/1.0 (+https://github.com/nakashnir/ai-worker-team)",
+            "User-Agent":   "EvalOpsNightlyAlerts/1.0",
         },
         method="POST",
     )

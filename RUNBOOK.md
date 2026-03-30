@@ -21,7 +21,7 @@ Files added for A8 v2:
 ## Local run
 
 ```bash
-cd /home/administrator/ai-worker-team-repo
+cd /path/to/ai-worker-team-repo
 chmod +x scripts/run_nightly_local.sh
 ./scripts/run_nightly_local.sh
 ```
@@ -221,16 +221,11 @@ curl -o /dev/null -w "%{http_code}" \
 
 ```bash
 # R-1. Bring orchestrator down
-cd /home/administrator/ai-worker-team
+cd /path/to/ai-worker-team-repo
 docker-compose stop orchestrator
 docker-compose rm -f orchestrator
 
-# R-2. Restore from backup (substitute your timestamp from Step 0)
-TS=YYYYMMDD_HHMMSS
-
-cp orchestrator/app.py.bak.${TS}      orchestrator/app.py
-cp orchestrator/Dockerfile.bak.${TS}  orchestrator/Dockerfile
-
+# R-2. If you maintain local backups, restore them per your environment policy.
 # R-3. No DB changes — no psql rollback needed.
 # R-4. No worker changes — worker stays running.
 
@@ -247,7 +242,7 @@ curl -sf http://127.0.0.1:8080/health
 ## File tree (changed files only)
 
 ```
-/home/administrator/ai-worker-team/
+ai-worker-team-repo/
 └── orchestrator/
     ├── app.py       <- UPDATED v1.7.0
     │                   /eval/runs      filters: status, model, provider, passed,
