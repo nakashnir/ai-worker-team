@@ -45,14 +45,25 @@ High-level components:
 
 ## Screenshots / Demo
 
-Add screenshots or short GIFs for:
+Dashboard overview.
 
-- Dashboard overview
-- Run detail page
-- Compare runs page
-- Nightly alert example payload/message
+![Dashboard overview](docs/assets/dashboard-main.png)
 
-> Placeholder: add image assets and links in a later pass.
+Run detail.
+
+![Run detail](docs/assets/run-detail.png)
+
+Compare runs.
+
+![Compare runs](docs/assets/compare-runs.png)
+
+GitHub Actions nightly workflow.
+
+![GitHub Actions nightly workflow](docs/assets/github-actions-nightly-eval.png)
+
+Discord alert.
+
+![Discord alert](docs/assets/discord-alert-success.png)
 
 ## Repository Structure
 
