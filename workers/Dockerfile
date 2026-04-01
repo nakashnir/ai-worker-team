@@ -16,6 +16,7 @@ RUN useradd --uid 1000 --no-create-home --shell /bin/false worker
 
 COPY schemas/    ./schemas/
 COPY providers/  ./providers/
+COPY evals/      ./evals/
 COPY workers/app.py ./app.py
 
 ENV PYTHONPATH=/app

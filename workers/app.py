@@ -34,6 +34,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from schemas.task_protocol import Task, TaskResult, TaskStatus, task_from_json
 from providers import resolve_provider
 from providers.anthropic import AnthropicProvider, ProviderFatalError
+from evals import get_evaluator, EvalInput
 
 REDIS_URL  = os.environ.get("REDIS_URL", "redis://redis:6379/0")
 SHARED_DIR = Path(os.environ.get("SHARED_DIR", "/app/shared"))
@@ -533,6 +534,21 @@ def handle_eval_run(
         log.record("provider_fallback", note=fallback_reason)
         print(f"[{WORKER_ID}] provider_fallback: {fallback_reason}", flush=True)
 
+    # ── 2b. Select evaluator ──────────────────────────────────────
+    # Check if inputs specify evaluator; default to deterministic
+    evaluator_name = task.inputs.get("evaluator", "deterministic")
+    use_llm_judge  = (evaluator_name == "llm_judge")
+    
+    if use_llm_judge:
+        judge_model = task.inputs.get("judge_model", "anthropic:claude-sonnet-4-5-20250929")
+        evaluator = get_evaluator("llm_judge", judge_model=judge_model)
+        log.record("evaluator_selected", note=f"llm_judge with model {judge_model}")
+        print(f"[{WORKER_ID}] using LLM judge: {judge_model}", flush=True)
+    else:
+        evaluator = get_evaluator("deterministic", scorers=scorers)
+        log.record("evaluator_selected", note=f"deterministic with scorers {scorers}")
+        print(f"[{WORKER_ID}] using deterministic scorers: {scorers}", flush=True)
+
     # ── 3. Prepare output paths ───────────────────────────────────
     run_dir = SHARED_DIR / "runs" / task.task_id
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -552,6 +568,11 @@ def handle_eval_run(
     acc_retries:       int        = 0
     acc_provider_ms:   int        = 0   # sum of per-sample provider elapsed_ms
     fatal_error:       str | None = None
+    
+    # Evaluator verdict tracking (for llm_judge runs)
+    evaluator_passed_count: int = 0  # Samples with passed=True
+    evaluator_valid_count:  int = 0  # Samples with valid verdict (True or False)
+    
     wall_start = time.monotonic()
 
     with dataset_path.open("r", encoding="utf-8") as fh, \
@@ -592,10 +613,42 @@ def handle_eval_run(
                 acc_output_tokens = (acc_output_tokens or 0) + meta_d["output_tokens"]
             acc_retries += meta_d.get("retries_count") or 0
 
-            scores: dict[str, int] = {}
-            for scorer in scorers:
-                scores[scorer] = _score_sample(scorer, output, expected)
-                totals[scorer] += scores[scorer]
+            # ── Run evaluator ─────────────────────────────────────────
+            eval_input = EvalInput(
+                task_id=task.task_id,
+                dataset_item_id=sample_id,
+                prompt=prompt,
+                expected_answer=expected,
+                model_output=output,
+                task_type=task.task_type,
+                metadata=row.get("metadata", {}),
+                rubric=None,  # Use default rubric for now
+            )
+            
+            eval_result = evaluator.evaluate(eval_input)
+            
+            # Track evaluator verdicts for run-level aggregation
+            # For judge runs: must have valid verdict on EVERY sample
+            if eval_result.passed is not None:
+                evaluator_valid_count += 1
+                if eval_result.passed:
+                    evaluator_passed_count += 1
+            
+            # Extract scores for backward compatibility with existing dashboards
+            # Deterministic evaluator returns scores in metrics dict
+            # LLM judge needs to be converted to legacy format
+            if use_llm_judge:
+                # For LLM judge, preserve deterministic scores for compatibility
+                # and add eval_result structure
+                scores: dict[str, int] = {}
+                for scorer in scorers:
+                    scores[scorer] = _score_sample(scorer, output, expected)
+                    totals[scorer] += scores[scorer]
+            else:
+                # Deterministic evaluator already has scores in metrics
+                scores = eval_result.metrics.copy()
+                for scorer in scorers:
+                    totals[scorer] += scores.get(scorer, 0)
 
             total_rows += 1
             sample_record: dict = {
@@ -606,6 +659,22 @@ def handle_eval_run(
                 "scores":     scores,
                 "elapsed_ms": sample_ms,
             }
+            
+            # Attach structured eval_result for new capabilities
+            if use_llm_judge or eval_result.error:
+                sample_record["eval_result"] = {
+                    "evaluator_name":    eval_result.evaluator_name,
+                    "score":             eval_result.score,
+                    "passed":            eval_result.passed,
+                    "confidence":        eval_result.confidence,
+                    "failure_category":  eval_result.failure_category,
+                    "summary_reason":    eval_result.summary_reason,
+                    "rubric_scores":     [rs.model_dump() for rs in eval_result.rubric_scores],
+                    "error":             eval_result.error,
+                }
+                if eval_result.raw_judge_output:
+                    sample_record["eval_result"]["raw_judge_output"] = eval_result.raw_judge_output
+            
             # Attach non-null provider meta to each sample
             provider_meta = {k: v for k, v in meta_d.items() if v is not None}
             if provider_meta:
@@ -628,7 +697,32 @@ def handle_eval_run(
     em_rate  = _rate("exact_match")       if "exact_match"       in scorers else None
     ce_rate  = _rate("contains_expected") if "contains_expected" in scorers else None
     nne_rate = _rate("format_nonempty")   if "format_nonempty"   in scorers else None
-    passed   = (em_rate == 1.0)           if (em_rate is not None and not fatal_error) else False
+    
+    # Run-level pass/fail: use evaluator verdict for judge runs, deterministic for others
+    if use_llm_judge:
+        # LLM judge: ALL samples must have valid verdicts AND all must pass
+        if total_rows == 0:
+            # Empty run: no samples evaluated, cannot pass
+            passed = False
+            evaluator_pass_rate = 0.0
+        elif evaluator_valid_count != total_rows:
+            # Some samples lack valid verdict (error/timeout/parsing failure)
+            passed = False
+            evaluator_pass_rate = (
+                round(evaluator_passed_count / total_rows, 4) if total_rows > 0 else 0.0
+            )
+        elif evaluator_passed_count != total_rows:
+            # All samples have verdicts, but some failed
+            passed = False
+            evaluator_pass_rate = round(evaluator_passed_count / total_rows, 4)
+        else:
+            # All samples have valid verdicts and all passed
+            passed = not fatal_error
+            evaluator_pass_rate = 1.0
+    else:
+        # Deterministic: legacy exact_match aggregation
+        passed = (em_rate == 1.0) if (em_rate is not None and not fatal_error) else False
+        evaluator_pass_rate = None
 
     elapsed_ms_avg = (
         round(acc_provider_ms / total_rows) if total_rows > 0 else 0
@@ -641,6 +735,10 @@ def handle_eval_run(
         "contains_expected_rate": ce_rate,
         "nonempty_rate":          nne_rate,
         "passed":                 passed,
+        # evaluator verdicts (llm_judge runs)
+        "evaluator_pass_rate":    evaluator_pass_rate,
+        "evaluator_passed_count": evaluator_passed_count if use_llm_judge else None,
+        "evaluator_valid_count":  evaluator_valid_count if use_llm_judge else None,
         # A6 telemetry — persisted in eval_runs.metrics JSONB
         "elapsed_ms_total":       total_wall_ms,
         "elapsed_ms_avg":         elapsed_ms_avg,
