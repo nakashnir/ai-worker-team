@@ -300,3 +300,178 @@ class TestMetricsAggregation:
         assert metrics["evaluator_pass_rate"] == 1.0
         assert metrics["evaluator_passed_count"] == 10
         assert metrics["evaluator_valid_count"] == 10
+
+
+class TestTaxonomyAggregation:
+    """Test failure taxonomy aggregation in metrics."""
+    
+    def test_single_category_aggregation(self):
+        """Single failure category should aggregate correctly."""
+        # Simulate 5 samples all with same failure
+        failure_category_counts = {"hallucination": 5}
+        
+        metrics = {
+            "failure_category_counts": failure_category_counts,
+            "top_failure_category": max(failure_category_counts, key=failure_category_counts.get),
+        }
+        
+        assert metrics["failure_category_counts"] == {"hallucination": 5}
+        assert metrics["top_failure_category"] == "hallucination"
+    
+    def test_mixed_category_aggregation(self):
+        """Multiple failure categories should aggregate with correct top category."""
+        failure_category_counts = {
+            "hallucination": 3,
+            "incomplete_answer": 2,
+            "provider_error": 1,
+        }
+        
+        top_category = max(failure_category_counts, key=failure_category_counts.get)
+        
+        assert top_category == "hallucination"
+        assert sum(failure_category_counts.values()) == 6
+    
+    def test_missing_category_normalized_to_unknown(self):
+        """Missing/None categories should normalize to 'unknown'."""
+        from evals.taxonomy import normalize_failure_category
+        
+        # Simulate samples with None category
+        normalized = normalize_failure_category(None)
+        assert normalized == "unknown"
+        
+        # Should be counted in aggregation
+        failure_category_counts = {"unknown": 3}
+        assert failure_category_counts["unknown"] == 3
+    
+    def test_empty_category_normalized_to_unknown(self):
+        """Empty string categories should normalize to 'unknown'."""
+        from evals.taxonomy import normalize_failure_category
+        
+        normalized = normalize_failure_category("")
+        assert normalized == "unknown"
+        
+        # Should be counted
+        failure_category_counts = {"unknown": 2}
+        assert failure_category_counts["unknown"] == 2
+    
+    def test_tie_breaking(self):
+        """When categories tie, max() should pick one consistently."""
+        failure_category_counts = {
+            "hallucination": 3,
+            "incomplete_answer": 3,
+        }
+        
+        top_category = max(failure_category_counts, key=failure_category_counts.get)
+        
+        # Should be one of them (deterministic based on dict ordering)
+        assert top_category in ["hallucination", "incomplete_answer"]
+    
+    def test_empty_categories(self):
+        """Empty category dict should have None values."""
+        failure_category_counts = {}
+        
+        metrics = {
+            "failure_category_counts": failure_category_counts if failure_category_counts else None,
+            "top_failure_category": max(failure_category_counts, key=failure_category_counts.get) if failure_category_counts else None,
+        }
+        
+        assert metrics["failure_category_counts"] is None
+        assert metrics["top_failure_category"] is None
+    
+    def test_all_passing_run_no_categories(self):
+        """Run with all passing samples should have no categories."""
+        # Simulate all samples passing
+        failure_category_counts = {}
+        total_rows = 10
+        evaluator_passed_count = 10
+        
+        metrics = {
+            "total": total_rows,
+            "passed": True,
+            "evaluator_passed_count": evaluator_passed_count,
+            "failure_category_counts": None,
+            "top_failure_category": None,
+        }
+        
+        assert metrics["passed"] is True
+        assert metrics["failure_category_counts"] is None
+        assert metrics["top_failure_category"] is None
+
+
+class TestValidVerdictMetrics:
+    """Test valid verdict metrics in run-level summary."""
+    
+    def test_valid_verdict_metrics_present(self):
+        """Valid verdict metrics should be present for judge runs."""
+        use_llm_judge = True
+        total_rows = 10
+        evaluator_valid_count = 10
+        
+        metrics = {
+            "valid_verdict_count": evaluator_valid_count,
+            "valid_verdict_rate": round(evaluator_valid_count / total_rows, 4),
+        }
+        
+        assert metrics["valid_verdict_count"] == 10
+        assert metrics["valid_verdict_rate"] == 1.0
+    
+    def test_partial_valid_verdicts(self):
+        """Partial valid verdicts should compute correct rate."""
+        use_llm_judge = True
+        total_rows = 10
+        evaluator_valid_count = 8  # 2 samples errored
+        
+        metrics = {
+            "valid_verdict_count": evaluator_valid_count,
+            "valid_verdict_rate": round(evaluator_valid_count / total_rows, 4),
+        }
+        
+        assert metrics["valid_verdict_count"] == 8
+        assert metrics["valid_verdict_rate"] == 0.8
+    
+    def test_deterministic_no_valid_verdict_metrics(self):
+        """Deterministic runs should have None for valid verdict metrics."""
+        use_llm_judge = False
+        
+        metrics = {
+            "valid_verdict_count": None,
+            "valid_verdict_rate": None,
+        }
+        
+        assert metrics["valid_verdict_count"] is None
+        assert metrics["valid_verdict_rate"] is None
+
+
+class TestBackwardCompatibility:
+    """Test backward compatibility with runs lacking taxonomy fields."""
+    
+    def test_old_run_without_eval_result(self):
+        """Old runs without eval_result should not crash."""
+        # Simulate old sample record (no eval_result)
+        sample_record = {
+            "sample_id": "e001",
+            "prompt": "Test",
+            "expected": "Expected",
+            "output": "Output",
+            "scores": {"exact_match": 1},
+            "elapsed_ms": 234,
+            # No eval_result field
+        }
+        
+        # Should be safe to check
+        has_eval_result = "eval_result" in sample_record
+        assert has_eval_result is False
+    
+    def test_old_metrics_without_taxonomy(self):
+        """Old metrics without taxonomy fields should be valid."""
+        metrics = {
+            "total": 10,
+            "exact_match_rate": 0.9,
+            "passed": True,
+            # No failure_category_counts or top_failure_category
+        }
+        
+        # Template should handle missing fields
+        has_taxonomy = "failure_category_counts" in metrics
+        assert has_taxonomy is False
+

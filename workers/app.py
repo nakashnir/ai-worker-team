@@ -35,6 +35,7 @@ from schemas.task_protocol import Task, TaskResult, TaskStatus, task_from_json
 from providers import resolve_provider
 from providers.anthropic import AnthropicProvider, ProviderFatalError
 from evals import get_evaluator, EvalInput
+from evals.taxonomy import normalize_failure_category
 
 REDIS_URL  = os.environ.get("REDIS_URL", "redis://redis:6379/0")
 SHARED_DIR = Path(os.environ.get("SHARED_DIR", "/app/shared"))
@@ -573,6 +574,9 @@ def handle_eval_run(
     evaluator_passed_count: int = 0  # Samples with passed=True
     evaluator_valid_count:  int = 0  # Samples with valid verdict (True or False)
     
+    # Taxonomy tracking (Sprint 3A)
+    failure_category_counts: dict[str, int] = {}  # category -> count
+    
     wall_start = time.monotonic()
 
     with dataset_path.open("r", encoding="utf-8") as fh, \
@@ -634,6 +638,18 @@ def handle_eval_run(
                 if eval_result.passed:
                     evaluator_passed_count += 1
             
+            # Normalize and track failure categories (Sprint 3A)
+            # Always normalize when taxonomy is being used (judge runs or errors)
+            normalized_category = None
+            if use_llm_judge or eval_result.error:
+                # Unconditional normalization: None/empty/invalid -> "unknown"
+                normalized_category = normalize_failure_category(eval_result.failure_category)
+                # Track category counts
+                failure_category_counts[normalized_category] = (
+                    failure_category_counts.get(normalized_category, 0) + 1
+                )
+            
+            
             # Extract scores for backward compatibility with existing dashboards
             # Deterministic evaluator returns scores in metrics dict
             # LLM judge needs to be converted to legacy format
@@ -667,7 +683,7 @@ def handle_eval_run(
                     "score":             eval_result.score,
                     "passed":            eval_result.passed,
                     "confidence":        eval_result.confidence,
-                    "failure_category":  eval_result.failure_category,
+                    "failure_category":  normalized_category or eval_result.failure_category,  # Use normalized
                     "summary_reason":    eval_result.summary_reason,
                     "rubric_scores":     [rs.model_dump() for rs in eval_result.rubric_scores],
                     "error":             eval_result.error,
@@ -748,6 +764,12 @@ def handle_eval_run(
             "input_tokens":  acc_input_tokens,
             "output_tokens": acc_output_tokens,
         },
+        # Sprint 3A: Failure taxonomy aggregates
+        "failure_category_counts": failure_category_counts if failure_category_counts else None,
+        "top_failure_category":    max(failure_category_counts, key=failure_category_counts.get) if failure_category_counts else None,
+        # Sprint 3A: Valid verdict metrics (explicit naming)
+        "valid_verdict_count": evaluator_valid_count if use_llm_judge else None,
+        "valid_verdict_rate":  round(evaluator_valid_count / total_rows, 4) if (use_llm_judge and total_rows > 0) else None,
     }
 
     # ── 6. Write file artifacts (always, even on fatal error) ─────

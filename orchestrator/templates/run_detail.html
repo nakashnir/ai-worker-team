@@ -157,6 +157,26 @@
       </div>
     {% endif %}
 
+    {# Sprint 3A: Failure taxonomy visibility #}
+    {% if metrics.top_failure_category %}
+      <div class="metric-card">
+        <div class="metric-label">Top Failure</div>
+        <div class="metric-value" style="font-size:.85rem;letter-spacing:normal;">
+          {{ metrics.top_failure_category.replace("_", " ").title() }}
+        </div>
+      </div>
+    {% endif %}
+
+    {% if metrics.failure_category_counts %}
+      {% set total_failures = metrics.failure_category_counts.values() | sum %}
+      <div class="metric-card">
+        <div class="metric-label">Failures</div>
+        <div class="metric-value">
+          {{ total_failures }}
+        </div>
+      </div>
+    {% endif %}
+
   </div>
 </section>
 
