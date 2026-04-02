@@ -167,6 +167,25 @@
         {% if cmp.model_same %}Same{% else %}Different{% endif %}
       </div>
     </div>
+    
+    {# Sprint 3B: Taxonomy delta cards #}
+    {% if cmp.judge_rate_delta is not none %}
+    <div class="delta-card">
+      <div class="delta-label">Judge Pass Δ</div>
+      <div class="delta-value {% if cmp.judge_rate_delta > 0.0001 %}delta-pos{% elif cmp.judge_rate_delta < -0.0001 %}delta-neg{% else %}delta-neutral{% endif %}">
+        {% if cmp.judge_rate_delta > 0.0001 %}+{% endif %}{{ "%.2f"|format(cmp.judge_rate_delta * 100) }}pp
+      </div>
+    </div>
+    {% endif %}
+    
+    {% if cmp.l_top_failure or cmp.r_top_failure %}
+    <div class="delta-card">
+      <div class="delta-label">Top Failure</div>
+      <div class="delta-value {% if cmp.top_failure_same == False %}delta-warn{% else %}delta-neutral{% endif %}">
+        {% if cmp.top_failure_same == False %}Different{% elif cmp.top_failure_same %}Same{% else %}—{% endif %}
+      </div>
+    </div>
+    {% endif %}
 
   </div>
 
@@ -249,6 +268,41 @@
             <th>Samples</th>
             <td class="mono">{{ m.total if m.total is not none else '—' }}</td>
           </tr>
+          
+          {# Sprint 3B: Taxonomy and verdict metrics #}
+          {% if m.top_failure_category %}
+          <tr {% if cmp.top_failure_same == False %}class="compare-row-highlight-warn"{% endif %}>
+            <th>Top Failure</th>
+            <td class="mono" style="font-size:.85rem;">
+              {{ m.top_failure_category.replace("_", " ").title() }}
+              {% if cmp.top_failure_same == False and ((loop.index == 1 and cmp.l_top_failure) or (loop.index == 2 and cmp.r_top_failure)) %}
+                <span class="changed-tag">different</span>
+              {% endif %}
+            </td>
+          </tr>
+          {% endif %}
+          
+          {% if m.evaluator_pass_rate is not none %}
+          <tr class="{% if cmp.judge_rate_delta is not none and ((loop.index == 1 and cmp.judge_rate_delta < -0.0001) or (loop.index == 2 and cmp.judge_rate_delta > 0.0001)) %}compare-row-highlight-good{% elif cmp.judge_rate_delta is not none and ((loop.index == 1 and cmp.judge_rate_delta > 0.0001) or (loop.index == 2 and cmp.judge_rate_delta < -0.0001)) %}compare-row-highlight-bad{% endif %}">
+            <th>Judge Pass Rate</th>
+            <td class="mono">
+              <strong>{{ "%.2f"|format(m.evaluator_pass_rate * 100) }}%</strong>
+              <div class="rate-track" style="margin-top:4px;width:100%;max-width:160px;">
+                {% set pct = m.evaluator_pass_rate * 100 %}
+                <div class="rate-fill {% if pct == 100 %}{% elif pct >= 50 %}rate-partial{% else %}rate-zero{% endif %}"
+                     style="width:{{ pct }}%"></div>
+              </div>
+            </td>
+          </tr>
+          {% endif %}
+          
+          {% if m.valid_verdict_rate is not none %}
+          <tr>
+            <th>Valid Verdict Rate</th>
+            <td class="mono">{{ "%.2f"|format(m.valid_verdict_rate * 100) }}%</td>
+          </tr>
+          {% endif %}
+          
           <tr>
             <th>Elapsed</th>
             <td class="mono">

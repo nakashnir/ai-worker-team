@@ -750,6 +750,24 @@ def _compare_runs(left: dict, right: dict) -> dict:
             verdict = "regression"
         elif em_delta > 0.0001:
             verdict = "improvement"
+    
+    # Sprint 3B: Taxonomy and verdict metrics
+    l_top_fail = lm.get("top_failure_category")
+    r_top_fail = rm.get("top_failure_category")
+    l_judge_rate = lm.get("evaluator_pass_rate")  # judge_pass_rate
+    r_judge_rate = rm.get("evaluator_pass_rate")
+    l_valid_rate = lm.get("valid_verdict_rate")
+    r_valid_rate = rm.get("valid_verdict_rate")
+    
+    # Judge pass rate delta
+    judge_rate_delta: float | None = None
+    if l_judge_rate is not None and r_judge_rate is not None:
+        judge_rate_delta = round(r_judge_rate - l_judge_rate, 4)
+    
+    # Valid verdict rate delta
+    valid_rate_delta: float | None = None
+    if l_valid_rate is not None and r_valid_rate is not None:
+        valid_rate_delta = round(r_valid_rate - l_valid_rate, 4)
 
     return {
         "em_delta":         em_delta,
@@ -761,6 +779,16 @@ def _compare_runs(left: dict, right: dict) -> dict:
         "status_changed":   left.get("status") != right.get("status"),
         "model_same":       left.get("model") == right.get("model"),
         "verdict":          verdict,           # regression | improvement | no_change
+        # Sprint 3B: Taxonomy comparison
+        "l_top_failure":    l_top_fail,
+        "r_top_failure":    r_top_fail,
+        "top_failure_same": l_top_fail == r_top_fail if (l_top_fail and r_top_fail) else None,
+        "l_judge_rate":     l_judge_rate,
+        "r_judge_rate":     r_judge_rate,
+        "judge_rate_delta": judge_rate_delta,
+        "l_valid_rate":     l_valid_rate,
+        "r_valid_rate":     r_valid_rate,
+        "valid_rate_delta": valid_rate_delta,
     }
 
 
