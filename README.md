@@ -1,10 +1,17 @@
 # ai-worker-team
 
-`ai-worker-team` is an EvalOps / LLM Quality Lab repository for running structured evaluation jobs, storing artifacts/results, and exposing regression signals through dashboard views and nightly CI checks. The project focuses on making evaluation behavior visible, repeatable, and operationally useful across local execution and scheduled workflows.
+**Production-inspired EvalOps infrastructure for LLM quality regression detection.**
+
+`ai-worker-team` is a complete evaluation operations system that runs structured LLM evaluation jobs, detects quality regressions, and surfaces diagnostic insights through an integrated dashboard and automated CI workflows. Built to demonstrate operational approaches for teams shipping LLM-backed features.
 
 ## Problem Statement
 
-Teams shipping LLM-backed features need a practical way to answer three recurring questions: did quality regress, where did it regress, and how quickly can that change be surfaced. Many teams have partial tooling, but lack a single, operational workflow for running evals, storing outcomes, and reviewing regressions.
+Teams shipping LLM-backed features face three critical operational questions:
+1. **Did quality regress?** — Automated detection of performance degradation
+2. **Where did it regress?** — Diagnostic visibility into failure patterns and root causes
+3. **How quickly can we surface it?** — Nightly CI integration with webhook alerts
+
+Most teams have partial tooling (scattered scripts, manual comparisons, ad-hoc evaluations) but lack a unified operational workflow for running evals, storing outcomes, analyzing regressions, and routing alerts.
 
 ## What the System Does
 
@@ -15,15 +22,52 @@ Teams shipping LLM-backed features need a practical way to answer three recurrin
 - Executes nightly regression checks in GitHub Actions.
 - Sends webhook-based nightly alerts, including Discord-compatible notifications.
 
-## Architecture Overview
+## Architecture
 
-High-level components:
+The system uses a task queue architecture with persistent storage and CI integration:
 
-- `orchestrator`: API + dashboard service for task submission, run queries, and UI.
-- `workers`: background execution service for eval tasks and artifact generation.
-- `postgres` + `redis`: persistence and queue/state coordination.
-- `shared/`: datasets plus runtime artifact directories (runs/reports/docs).
-- GitHub Actions: scheduled nightly eval + alerting workflow.
+```
+┌─────────────┐      ┌──────────────┐      ┌─────────────┐
+│   Client    │─────▶│ Orchestrator │◀────▶│  Dashboard  │
+│  (Submit)   │      │   (FastAPI)  │      │   (Web UI)  │
+└─────────────┘      └──────────────┘      └─────────────┘
+                            │
+                            ▼
+                     ┌──────────────┐
+                     │    Redis     │
+                     │  (Queue)     │
+                     └──────────────┘
+                            │
+                            ▼
+                     ┌──────────────┐      ┌─────────────┐
+                     │   Workers    │◀────▶│  Providers  │
+                     │  (Eval Exec) │      │ (LLM APIs)  │
+                     └──────────────┘      └─────────────┘
+                            │
+                            ▼
+                     ┌──────────────┐
+                     │  PostgreSQL  │
+                     │  (Results)   │
+                     └──────────────┘
+                            │
+                            ▼
+                     ┌──────────────┐      ┌─────────────┐
+                     │GitHub Actions│─────▶│  Webhooks   │
+                     │  (Nightly)   │      │  (Alerts)   │
+                     └──────────────┘      └─────────────┘
+```
+
+**Components:**
+
+- **Orchestrator**: FastAPI service exposing task submission API and dashboard UI
+- **Workers**: Background execution service that runs evaluations and computes metrics
+- **Providers**: LLM integration layer with fallback handling (Anthropic, OpenAI)
+- **PostgreSQL**: Persistent storage for run results, metrics, and sample-level data
+- **Redis**: Task queue and coordination layer
+- **Dashboard**: Read-only web UI for run inspection and comparison
+- **GitHub Actions**: Scheduled nightly regression workflow with webhook alerting
+
+For detailed architecture documentation, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Core Workflows
 
@@ -33,35 +77,61 @@ High-level components:
 4. Dashboard surfaces run details and comparison views.
 5. Nightly workflow executes regression checks and emits alerts.
 
-## Key Features
+## Core Capabilities
 
-- Eval run execution and metric reporting.
-- Run detail inspection with sample-level visibility.
-- Compare-runs view for regression checks.
-- Nightly regression automation (A8).
-- Dashboard read-only base (A9) and polish/safe metric rendering (A10).
-- Compare-runs + regression visibility updates (A11).
-- Nightly alerts + regression summary + Discord webhook path (A12).
+**Evaluation Execution**
+- Multi-provider LLM evaluation with fallback handling (Anthropic, OpenAI)
+- Deterministic scorers (exact match, contains expected, non-empty validation)
+- LLM-as-judge evaluator with structured verdict extraction
+- Sample-level and run-level metric aggregation
 
-## Screenshots / Demo
+**Quality Diagnostics**
+- Failure taxonomy classification (hallucination, incomplete answer, format errors, provider errors)
+- Verdict quality metrics (judge pass rate, valid verdict rate)
+- Category-level failure aggregation and top failure identification
+- Backward-compatible metric rendering for runs with/without taxonomy
 
-Dashboard overview.
+**Regression Detection**
+- Run-to-run comparison with delta visualization
+- Taxonomy-aware compare views (judge pass rate deltas, top failure category changes)
+- Automated nightly regression checks via GitHub Actions
+- Pass/fail verdict alignment with configurable thresholds
+
+**Operational Visibility**
+- Web dashboard for run inspection and historical comparison
+- Sample-level drill-down with evaluator verdict details
+- Nightly webhook alerts with regression summaries (Discord-compatible)
+- Artifact persistence (JSON reports, run history, sample details)
+
+## Screenshots
+
+**Dashboard: Run History and Filtering**
+
+Browse evaluation runs with status, model, pass/fail verdict, and metric summaries. Filter by status, model, or time range.
 
 ![Dashboard overview](docs/assets/dashboard-main.png)
 
-Run detail.
+**Run Detail: Sample-Level Diagnostics**
+
+Drill down into individual runs to inspect sample-level results, evaluator verdicts, failure categories, and LLM judge reasoning.
 
 ![Run detail](docs/assets/run-detail.png)
 
-Compare runs.
+**Compare Runs: Regression Analysis**
+
+Side-by-side comparison of two eval runs showing metric deltas, top failure category changes, and judge pass rate improvements/regressions.
 
 ![Compare runs](docs/assets/compare-runs.png)
 
-GitHub Actions nightly workflow.
+**GitHub Actions: Nightly Automation**
+
+Automated nightly regression checks run on schedule, execute baseline evaluations, and upload artifacts for dashboard inspection.
 
 ![GitHub Actions nightly workflow](docs/assets/github-actions-nightly-eval.png)
 
-Discord alert.
+**Discord Alerts: Regression Notifications**
+
+Webhook-based alerts notify teams of regression status, including pass/fail verdict, metric deltas, and links to run details.
 
 ![Discord alert](docs/assets/discord-alert-success.png)
 
@@ -83,13 +153,27 @@ Discord alert.
 
 ## Tech Stack
 
-- Python 3.11+
-- FastAPI + Uvicorn
-- Jinja2 templates + static dashboard assets
-- Redis
-- PostgreSQL
-- Docker Compose
-- GitHub Actions
+**Backend:**
+- Python 3.11+ with type hints and strict validation
+- FastAPI + Uvicorn for API and dashboard serving
+- Pydantic for schema validation and serialization
+- PostgreSQL for persistent result storage
+- Redis for task queue and coordination
+
+**Frontend:**
+- Jinja2 templates with server-side rendering
+- Vanilla JavaScript for interactive features
+- CSS with design system tokens
+
+**Infrastructure:**
+- Docker Compose for local development
+- GitHub Actions for CI/CD and nightly workflows
+- Webhook integration for alerting (Discord-compatible)
+
+**Evaluation:**
+- Multi-provider LLM integration (Anthropic Claude, OpenAI)
+- Structured JSON output parsing for LLM-as-judge
+- Deterministic scorers for baseline metrics
 
 ## How to Run Locally
 
@@ -145,11 +229,25 @@ Primary environment variables used across services/workflows:
 - `ALERT_WEBHOOK_URL`
 - `ALERT_ON_SUCCESS`
 
-## Limitations
+## Current Scope & Limitations
 
-- Historical analytics are limited: the project surfaces run-level comparisons and nightly pass/fail checks, but does not yet provide dedicated long-horizon trend dashboards.
-- Scoring is intentionally focused on current regression workflows; broader rubric/benchmark coverage is still in progress.
-- Alerting is webhook-first and CI-driven; advanced routing/escalation policies are not yet built in.
+**What's Built:**
+- Production-inspired EvalOps infrastructure with persistent storage and CI integration
+- LLM-as-judge evaluator with failure taxonomy classification
+- Taxonomy-aware comparison views with diagnostic deltas
+- Automated nightly regression detection with webhook alerts
+- Backward-compatible metric rendering for legacy runs
+
+**Intentional Limitations:**
+- **Analytics**: Run-level comparisons and nightly checks are primary; dedicated trend dashboards for long-horizon analysis are not yet implemented
+- **Scoring**: Focused on current regression workflows; broader rubric coverage and custom scorer frameworks are in progress
+- **Alerting**: Webhook-first design with Discord compatibility; advanced routing, escalation policies, and multi-channel delivery are future work
+- **Taxonomy**: Fixed failure category set; custom taxonomies per evaluator or domain are not yet supported
+
+**Design Decisions:**
+- Read-only dashboard (no in-UI task submission) to maintain clear operational boundaries
+- Alerting is non-fatal by design; regression workflows continue even on webhook failure
+- Sample-level data persisted for diagnostics but not exposed in public API endpoints
 
 ## Future Work
 
