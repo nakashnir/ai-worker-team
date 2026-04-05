@@ -549,6 +549,8 @@ def handle_eval_run(
         evaluator = get_evaluator("deterministic", scorers=scorers)
         log.record("evaluator_selected", note=f"deterministic with scorers {scorers}")
         print(f"[{WORKER_ID}] using deterministic scorers: {scorers}", flush=True)
+    
+    rubric = task.inputs.get("rubric")
 
     # ── 3. Prepare output paths ───────────────────────────────────
     run_dir = SHARED_DIR / "runs" / task.task_id
@@ -626,7 +628,7 @@ def handle_eval_run(
                 model_output=output,
                 task_type=task.task_type,
                 metadata=row.get("metadata", {}),
-                rubric=None,  # Use default rubric for now
+                rubric=rubric,
             )
             
             eval_result = evaluator.evaluate(eval_input)
