@@ -146,6 +146,18 @@ def _coerce_run_row(row: Any) -> dict:
     for col in ("scorers", "metrics"):
         if isinstance(d.get(col), str):
             d[col] = json.loads(d[col])
+    metrics = d.get("metrics")
+    if isinstance(metrics, dict):
+        for key in (
+            "valid_verdict_rate",
+            "evaluator_pass_rate",
+            "top_failure_category",
+            "retries_count",
+            "elapsed_ms_total",
+            "contains_expected_rate",
+            "nonempty_rate",
+        ):
+            metrics.setdefault(key, None)
     for col in ("created_at", "completed_at"):
         v = d.get(col)
         if v is not None and hasattr(v, "isoformat"):

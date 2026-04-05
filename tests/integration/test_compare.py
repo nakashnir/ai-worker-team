@@ -4,6 +4,9 @@ Integration tests for compare functionality with taxonomy metrics.
 """
 
 import pytest
+from starlette.requests import Request
+
+import orchestrator.app as app_module
 
 
 class TestCompareWithTaxonomy:
@@ -326,3 +329,105 @@ class TestBackwardCompatibility:
         # Can't compute taxonomy delta
         top_same = o_top == n_top if (o_top and n_top) else None
         assert top_same is None
+
+
+def test_compare_route_legacy_vs_legacy_status_200(monkeypatch):
+    def fake_exec_query(sql: str, params: list):
+        if "WHERE  task_id = %s" in sql:
+            task_id = params[0]
+            if task_id == "legacy-left":
+                return [{
+                    "task_id": "legacy-left",
+                    "dataset_path": "datasets/legacy.jsonl",
+                    "model": "model-legacy",
+                    "scorers": '["exact_match"]',
+                    "status": "done",
+                    "metrics": (
+                        '{"exact_match_rate": 0.75, "passed": true}'
+                    ),
+                    "created_at": "2026-01-01T00:00:00+00:00",
+                    "completed_at": "2026-01-01T00:01:00+00:00",
+                }]
+            if task_id == "legacy-right":
+                return [{
+                    "task_id": "legacy-right",
+                    "dataset_path": "datasets/legacy.jsonl",
+                    "model": "model-legacy",
+                    "scorers": '["exact_match"]',
+                    "status": "done",
+                    "metrics": (
+                        '{"exact_match_rate": 0.80, "passed": true}'
+                    ),
+                    "created_at": "2026-01-02T00:00:00+00:00",
+                    "completed_at": "2026-01-02T00:01:00+00:00",
+                }]
+            return []
+        return []
+
+    monkeypatch.setattr(app_module, "_exec_query", fake_exec_query)
+    request = Request({
+        "type": "http",
+        "method": "GET",
+        "path": "/dashboard/compare",
+        "headers": [],
+        "query_string": b"left=legacy-left&right=legacy-right",
+    })
+    response = app_module.dashboard_compare(
+        request=request,
+        left="legacy-left",
+        right="legacy-right",
+    )
+    _ = response.body
+    assert response.status_code == 200
+
+
+def test_compare_route_legacy_vs_taxonomy_status_200(monkeypatch):
+    def fake_exec_query(sql: str, params: list):
+        if "WHERE  task_id = %s" in sql:
+            task_id = params[0]
+            if task_id == "legacy-left":
+                return [{
+                    "task_id": "legacy-left",
+                    "dataset_path": "datasets/legacy.jsonl",
+                    "model": "model-legacy",
+                    "scorers": '["exact_match"]',
+                    "status": "done",
+                    "metrics": (
+                        '{"exact_match_rate": 0.75, "passed": true}'
+                    ),
+                    "created_at": "2026-01-01T00:00:00+00:00",
+                    "completed_at": "2026-01-01T00:01:00+00:00",
+                }]
+            if task_id == "taxonomy-right":
+                return [{
+                    "task_id": "taxonomy-right",
+                    "dataset_path": "datasets/new.jsonl",
+                    "model": "model-taxonomy",
+                    "scorers": '["exact_match", "llm_judge"]',
+                    "status": "done",
+                    "metrics": (
+                        '{"exact_match_rate": 0.85, "passed": true, '
+                        '"valid_verdict_rate": 0.95, "evaluator_pass_rate": 0.90, '
+                        '"top_failure_category": "incorrect_format", "retries_count": 1}'
+                    ),
+                    "created_at": "2026-02-01T00:00:00+00:00",
+                    "completed_at": "2026-02-01T00:01:00+00:00",
+                }]
+            return []
+        return []
+
+    monkeypatch.setattr(app_module, "_exec_query", fake_exec_query)
+    request = Request({
+        "type": "http",
+        "method": "GET",
+        "path": "/dashboard/compare",
+        "headers": [],
+        "query_string": b"left=legacy-left&right=taxonomy-right",
+    })
+    response = app_module.dashboard_compare(
+        request=request,
+        left="legacy-left",
+        right="taxonomy-right",
+    )
+    _ = response.body
+    assert response.status_code == 200
