@@ -69,6 +69,10 @@ The system uses a task queue architecture with persistent storage and CI integra
 
 For detailed architecture documentation, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
+**Development Workflow:**
+
+For information on the repository workflow, development stages (Builder → QA → Verification → Codex), and the distinction between the repository tree and live tree, see [docs/WORKFLOW.md](docs/WORKFLOW.md).
+
 ## Core Workflows
 
 1. Submit an eval task.
