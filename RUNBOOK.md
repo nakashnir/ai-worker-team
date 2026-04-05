@@ -3,7 +3,7 @@
 ## Scope
 
 This repo includes a nightly regression workflow for `eval.run` on
-`shared/datasets/sample_eval_valid_v1.jsonl`.
+`shared/datasets/nightly_eval_curated_v1.jsonl`.
 
 Files added for A8 v2:
 
@@ -30,7 +30,7 @@ Optional overrides:
 
 ```bash
 ORCH_URL=http://127.0.0.1:8080 \
-DATASET_PATH=shared/datasets/sample_eval_valid_v1.jsonl \
+DATASET_PATH=shared/datasets/nightly_eval_curated_v1.jsonl \
 MODEL=anthropic:claude-sonnet-4-5-20250929 \
 ./scripts/run_nightly_local.sh
 ```
@@ -44,14 +44,17 @@ MODEL=anthropic:claude-sonnet-4-5-20250929 \
 
 ## Baseline contract
 
-`baselines/eval_valid_v1_baseline.json` currently enforces:
+`baselines/eval_valid_v1_baseline.json` enforces:
 
-- dataset path equals `shared/datasets/sample_eval_valid_v1.jsonl`
+- dataset path equals the nightly dataset configured for the run
 - scorers list equals `["exact_match","contains_expected","format_nonempty"]`
 - `metrics.exact_match_rate >= 1.0`
 - `metrics.passed == true`
 
+For this curated nightly path, align the baseline dataset path to
+`shared/datasets/nightly_eval_curated_v1.jsonl`.
 Adjust thresholds in that baseline file when intentionally changing expectations.
+Keep `shared/datasets/sample_eval_valid_v1.jsonl` available as a smoke/sample fixture.
 
 ## GitHub workflow
 
@@ -72,7 +75,7 @@ curl -sf "http://127.0.0.1:8080/eval/run/${TASK_ID}" | python3 -m json.tool
 ```json
 {
   "task_id":       "...",
-  "dataset_path":  "datasets/sample_eval_valid_v1.jsonl",
+  "dataset_path":  "datasets/nightly_eval_curated_v1.jsonl",
   "model":         "anthropic:claude-sonnet-4-5-20250929",
   "scorers":       ["exact_match", "contains_expected", "format_nonempty"],
   "status":        "done",
@@ -145,7 +148,7 @@ print(f'count={d[\"count\"]}  total={d[\"total\"]}  offset={d[\"offset\"]}')
 
 > The substring search is case-insensitive and checks `prompt`, `expected`, and `output`.
 > Use a substring that appears in your dataset. The example below uses `"Paris"` — replace
-> with a term that actually appears in your `sample_eval_valid_v1.jsonl` prompts.
+> with a term that actually appears in your `nightly_eval_curated_v1.jsonl` prompts.
 
 ```bash
 # 25. Search: substring in prompt/expected/output

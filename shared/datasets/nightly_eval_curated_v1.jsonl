@@ -1,0 +1,8 @@
+{"id":"n001","prompt":"Return the incident tier for: 'Checkout is down for all users'. Reply with one lowercase word.","expected":"critical","metadata":{"category":"ops_incident","domain":"commerce"}}
+{"id":"n002","prompt":"Return the incident tier for: 'Search is slower than usual but still works'. Reply with one lowercase word.","expected":"high","metadata":{"category":"ops_incident","domain":"commerce"}}
+{"id":"n003","prompt":"Return the deployment environment code for 'production'. Reply with one lowercase word.","expected":"prod","metadata":{"category":"platform","domain":"release"}}
+{"id":"n004","prompt":"Return the deployment environment code for 'staging'. Reply with one lowercase word.","expected":"stage","metadata":{"category":"platform","domain":"release"}}
+{"id":"n005","prompt":"Classify this customer request: 'Please delete all personal data tied to my account'. Reply with one lowercase token.","expected":"privacy","metadata":{"category":"compliance","domain":"support"}}
+{"id":"n006","prompt":"Classify this customer request: 'I was charged twice for the same invoice'. Reply with one lowercase token.","expected":"billing","metadata":{"category":"support_queue","domain":"finance"}}
+{"id":"n007","prompt":"Return the on-call escalation level for: 'Internal admin panel typo'. Reply with one lowercase token.","expected":"low","metadata":{"category":"ops_incident","domain":"internal_tools"}}
+{"id":"n008","prompt":"Return the quality verdict for this response: 'User asked for refund policy and answer includes policy URL'. Reply with one lowercase token.","expected":"pass","metadata":{"category":"qa_review","domain":"policy"}}

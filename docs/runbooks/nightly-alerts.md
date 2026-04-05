@@ -44,7 +44,7 @@ services, route `ALERT_WEBHOOK_URL` through an adapter, or extend
   "pass_fail": "fail",
   "task_id": "a3f1c2d4-8b7e-4f2a-9c1d-0e5f6a7b8c9d",
   "model": "anthropic:claude-sonnet-4-5-20250929",
-  "dataset_path": "datasets/sample_eval_valid_v1.jsonl",
+  "dataset_path": "datasets/nightly_eval_curated_v1.jsonl",
   "exact_match_rate": 0.7,
   "timestamp": "2026-03-20T02:14:33+00:00",
   "github_run_url": "https://github.com/org/ai-worker-team/actions/runs/123456789",

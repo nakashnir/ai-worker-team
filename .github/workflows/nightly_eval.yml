@@ -70,7 +70,7 @@ jobs:
       - name: Verify dataset file exists
         shell: bash
         run: |
-          test -f shared/datasets/sample_eval_valid_v1.jsonl
+          test -f shared/datasets/nightly_eval_curated_v1.jsonl
 
       - name: Initialize Postgres schema
         shell: bash
@@ -95,7 +95,7 @@ jobs:
         shell: bash
         env:
           RUN_DATE: "${{ github.run_id }}"
-          DATASET:  "shared/datasets/sample_eval_valid_v1.jsonl"
+          DATASET:  "shared/datasets/nightly_eval_curated_v1.jsonl"
         run: python3 .github/scripts/make_regression_summary.py
 
       - name: Upload regression-summary artifact
