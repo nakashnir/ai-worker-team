@@ -121,6 +121,9 @@ class TestNewEvalFormSubmission:
                 pushed.append(json.loads(payload))
 
         monkeypatch.setattr(app_module, "get_redis", lambda: FakeRedis())
+        monkeypatch.setattr(
+            app_module, "_available_datasets", lambda: ["nightly_eval_curated_v1.jsonl"]
+        )
 
         response = app_module.dashboard_new_submit(
             request=_make_request(),
@@ -230,6 +233,9 @@ class TestNewEvalFormSubmission:
                 pushed.append(json.loads(payload))
 
         monkeypatch.setattr(app_module, "get_redis", lambda: FakeRedis())
+        monkeypatch.setattr(
+            app_module, "_available_datasets", lambda: ["test.jsonl"]
+        )
 
         rubric = [{"key": "quality", "label": "Quality", "description": "Is it good?", "weight": 1.0, "required": True}]
 
@@ -251,3 +257,104 @@ class TestNewEvalFormSubmission:
         assert task["inputs"]["rubric"] == rubric
         assert task["inputs"]["judge_model"] == "anthropic:claude-sonnet-4-5-20250929"
         assert response.status_code == 303
+
+    def test_new_eval_dataset_not_exists_returns_422(self, monkeypatch):
+        """Existing dataset_path but file not in shared area should return 422 and NOT queue."""
+        pushed: list = []
+
+        class FakeRedis:
+            def lpush(self, queue, payload):
+                pushed.append(json.loads(payload))
+
+        monkeypatch.setattr(app_module, "get_redis", lambda: FakeRedis())
+        monkeypatch.setattr(
+            app_module, "_available_datasets", lambda: ["other.jsonl"]
+        )
+        monkeypatch.setattr(app_module, "_distinct_models", lambda: [])
+        monkeypatch.setattr(
+            app_module, "_last_nightly_summary", lambda: {"available": False}
+        )
+
+        response = app_module.dashboard_new_submit(
+            request=_make_request(),
+            description="Test missing dataset",
+            task_type="eval.run",
+            model="anthropic:claude-sonnet-4-5-20250929",
+            dataset_path="datasets/test.jsonl",
+            evaluator="deterministic",
+            judge_model=None,
+            scorers=["exact_match"],
+            rubric_json=None,
+        )
+
+        assert response.status_code == 422
+        body = response.body.decode("utf-8")
+        assert "does not exist in the shared datasets area" in body
+        assert len(pushed) == 0
+
+    def test_new_eval_dataset_exists_succeeds(self, monkeypatch):
+        """Dataset that exists in _available_datasets should queue a task."""
+        pushed: list = []
+
+        class FakeRedis:
+            def lpush(self, queue, payload):
+                pushed.append(json.loads(payload))
+
+        monkeypatch.setattr(app_module, "get_redis", lambda: FakeRedis())
+        monkeypatch.setattr(
+            app_module, "_available_datasets", lambda: ["test.jsonl"]
+        )
+        monkeypatch.setattr(app_module, "_distinct_models", lambda: [])
+        monkeypatch.setattr(
+            app_module, "_last_nightly_summary", lambda: {"available": False}
+        )
+
+        response = app_module.dashboard_new_submit(
+            request=_make_request(),
+            description="Test eval run",
+            task_type="eval.run",
+            model="anthropic:claude-sonnet-4-5-20250929",
+            dataset_path="datasets/test.jsonl",
+            evaluator="deterministic",
+            judge_model=None,
+            scorers=["exact_match"],
+            rubric_json=None,
+        )
+
+        assert response.status_code == 303
+        assert response.headers["location"] == "/dashboard"
+        assert len(pushed) == 1
+        assert pushed[0]["inputs"]["dataset_path"] == "datasets/test.jsonl"
+
+    def test_new_eval_dataset_path_without_prefix_accepted(self, monkeypatch):
+        """dataset_path without 'datasets/' prefix is accepted if filename exists."""
+        pushed: list = []
+
+        class FakeRedis:
+            def lpush(self, queue, payload):
+                pushed.append(json.loads(payload))
+
+        monkeypatch.setattr(app_module, "get_redis", lambda: FakeRedis())
+        monkeypatch.setattr(
+            app_module, "_available_datasets", lambda: ["test.jsonl"]
+        )
+        monkeypatch.setattr(app_module, "_distinct_models", lambda: [])
+        monkeypatch.setattr(
+            app_module, "_last_nightly_summary", lambda: {"available": False}
+        )
+
+        response = app_module.dashboard_new_submit(
+            request=_make_request(),
+            description="Test no prefix",
+            task_type="eval.run",
+            model=None,
+            dataset_path="test.jsonl",
+            evaluator="deterministic",
+            judge_model=None,
+            scorers=["exact_match"],
+            rubric_json=None,
+        )
+
+        assert response.status_code == 303
+        assert len(pushed) == 1
+        assert pushed[0]["inputs"]["dataset_path"] == "test.jsonl"

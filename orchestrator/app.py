@@ -1014,6 +1014,37 @@ def dashboard_new_submit(
                 status_code=422,
             )
 
+    # ── Validate dataset exists in shared area ──────────────────────
+    ds_filename = dataset_path
+    if ds_filename.startswith("datasets/"):
+        ds_filename = ds_filename[len("datasets/"):]
+    available = _available_datasets()
+    if ds_filename not in available:
+        return HTMLResponse(
+            content=templates.TemplateResponse(
+                "new_eval.html",
+                {
+                    "request":           request,
+                    "datasets":          available,
+                    "models":            _distinct_models(),
+                    "available_scorers": _KNOWN_SCORERS,
+                    "form": {
+                        "description": description,
+                        "task_type": task_type,
+                        "model": model,
+                        "dataset_path": dataset_path,
+                        "evaluator": evaluator,
+                        "judge_model": judge_model,
+                        "scorers": scorers,
+                        "rubric_json": rubric_json,
+                    },
+                    "error": f"Dataset '{dataset_path}' does not exist in the shared datasets area.",
+                    "nightly": _last_nightly_summary(),
+                },
+            ).body,
+            status_code=422,
+        )
+
     # ── Build inputs dict (same shape submit_task expects) ──────
     inputs: Dict[str, Any] = {
         "dataset_path": dataset_path,
