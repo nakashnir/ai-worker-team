@@ -1,0 +1,253 @@
+"""
+tests/integration/test_dashboard_product.py
+Integration tests for Sprint D: dashboard productization layer.
+
+Tests:
+- GET /dashboard/connect returns 200
+- GET /dashboard/new returns 200 with form elements
+- POST /dashboard/new with valid fields creates a task in Redis
+- POST /dashboard/new with missing description returns 422
+"""
+
+import json
+from unittest.mock import MagicMock, patch
+
+import pytest
+from starlette.requests import Request
+
+import orchestrator.app as app_module
+
+
+def _make_request(query_string=b""):
+    return Request({
+        "type": "http",
+        "method": "GET",
+        "path": "/dashboard/connect",
+        "headers": [],
+        "query_string": query_string,
+    })
+
+
+class TestConnectPage:
+    """Tests for GET /dashboard/connect."""
+
+    def test_connect_page_returns_200(self, monkeypatch):
+        """GET /dashboard/connect should return 200 with dataset info."""
+        monkeypatch.setattr(app_module, "SHARED_DIR", app_module.SHARED_DIR)
+
+        def fake_datasets():
+            return ["sample.jsonl", "nightly_eval_curated_v1.jsonl"]
+
+        monkeypatch.setattr(app_module, "_available_datasets", fake_datasets)
+        monkeypatch.setattr(
+            app_module,
+            "_last_nightly_summary",
+            lambda: {"available": False},
+        )
+        monkeypatch.setattr(
+            app_module,
+            "_exec_query",
+            lambda *a, **kw: [],
+        )
+
+        request = _make_request()
+        response = app_module.dashboard_connect(request=request)
+
+        assert response.status_code == 200
+        body = response.body.decode("utf-8")
+        assert "nightly_eval_curated_v1.jsonl" in body
+        assert "How to Connect" in body
+
+    def test_connect_empty_datasets(self, monkeypatch):
+        """Should still render when no datasets exist."""
+        monkeypatch.setattr(app_module, "_available_datasets", lambda: [])
+        monkeypatch.setattr(
+            app_module, "_last_nightly_summary", lambda: {"available": False}
+        )
+
+        request = _make_request()
+        response = app_module.dashboard_connect(request=request)
+
+        assert response.status_code == 200
+
+
+class TestNewEvalPage:
+    """Tests for GET /dashboard/new."""
+
+    def test_new_eval_page_returns_200(self, monkeypatch):
+        """GET /dashboard/new should render form with dataset options."""
+        monkeypatch.setattr(
+            app_module, "_available_datasets", lambda: ["test.jsonl"]
+        )
+        monkeypatch.setattr(app_module, "_distinct_models", lambda: [])
+        monkeypatch.setattr(
+            app_module, "_last_nightly_summary", lambda: {"available": False}
+        )
+
+        request = _make_request()
+        response = app_module.dashboard_new(request=request)
+
+        assert response.status_code == 200
+        body = response.body.decode("utf-8")
+        assert "Create Evaluation" in body
+        assert "test.jsonl" in body
+        assert "exact_match" in body
+
+
+class TestNewEvalFormSubmission:
+    """Tests for POST /dashboard/new."""
+
+    def _build_form(self, **fields):
+        """Build a dict simulating form data."""
+        defaults = {
+            "description": "Test eval run",
+            "task_type": "eval.run",
+            "model": "anthropic:claude-sonnet-4-5-20250929",
+            "dataset_path": "datasets/nightly_eval_curated_v1.jsonl",
+            "evaluator": "deterministic",
+            "judge_model": None,
+            "scorers": ["exact_match"],
+            "rubric_json": None,
+        }
+        defaults.update(fields)
+        return defaults
+
+    def test_new_eval_form_post_creates_task(self, monkeypatch):
+        """Valid form should push a task to Redis."""
+        pushed: list = []
+
+        class FakeRedis:
+            def lpush(self, queue, payload):
+                pushed.append(json.loads(payload))
+
+        monkeypatch.setattr(app_module, "get_redis", lambda: FakeRedis())
+
+        response = app_module.dashboard_new_submit(
+            request=_make_request(),
+            description="Test eval run",
+            task_type="eval.run",
+            model="anthropic:claude-sonnet-4-5-20250929",
+            dataset_path="datasets/nightly_eval_curated_v1.jsonl",
+            evaluator="deterministic",
+            judge_model=None,
+            scorers=["exact_match"],
+            rubric_json=None,
+        )
+
+        assert len(pushed) == 1
+        task = pushed[0]
+        assert task["task_type"] == "eval.run"
+        assert task["description"] == "Test eval run"
+        assert task["inputs"]["dataset_path"] == "datasets/nightly_eval_curated_v1.jsonl"
+        assert task["inputs"]["scorers"] == ["exact_match"]
+
+        # Redirect to /dashboard
+        assert response.status_code == 303
+        assert response.headers["location"] == "/dashboard"
+
+    def test_new_eval_missing_description_returns_422(self, monkeypatch):
+        """Empty description should return 422 with error message."""
+        monkeypatch.setattr(
+            app_module, "_available_datasets", lambda: ["test.jsonl"]
+        )
+        monkeypatch.setattr(app_module, "_distinct_models", lambda: [])
+        monkeypatch.setattr(
+            app_module, "_last_nightly_summary", lambda: {"available": False}
+        )
+
+        response = app_module.dashboard_new_submit(
+            request=_make_request(),
+            description="",
+            task_type="eval.run",
+            model=None,
+            dataset_path="datasets/test.jsonl",
+            evaluator="deterministic",
+            judge_model=None,
+            scorers=["exact_match"],
+            rubric_json=None,
+        )
+
+        assert response.status_code == 422
+        body = response.body.decode("utf-8")
+        assert "Description is required" in body
+
+    def test_new_eval_missing_dataset_returns_422(self, monkeypatch):
+        """Missing dataset_path should return 422."""
+        monkeypatch.setattr(
+            app_module, "_available_datasets", lambda: []
+        )
+        monkeypatch.setattr(app_module, "_distinct_models", lambda: [])
+        monkeypatch.setattr(
+            app_module, "_last_nightly_summary", lambda: {"available": False}
+        )
+
+        response = app_module.dashboard_new_submit(
+            request=_make_request(),
+            description="Some description",
+            task_type="eval.run",
+            model=None,
+            dataset_path=None,
+            evaluator="deterministic",
+            judge_model=None,
+            scorers=["exact_match"],
+            rubric_json=None,
+        )
+
+        assert response.status_code == 422
+        body = response.body.decode("utf-8")
+        assert "Dataset path is required" in body
+
+    def test_new_eval_malformed_rubric_returns_422(self, monkeypatch):
+        """Invalid JSON in rubric field should return 422."""
+        monkeypatch.setattr(
+            app_module, "_available_datasets", lambda: ["test.jsonl"]
+        )
+        monkeypatch.setattr(app_module, "_distinct_models", lambda: [])
+        monkeypatch.setattr(
+            app_module, "_last_nightly_summary", lambda: {"available": False}
+        )
+
+        response = app_module.dashboard_new_submit(
+            request=_make_request(),
+            description="Test with bad rubric",
+            task_type="eval.run",
+            dataset_path="datasets/test.jsonl",
+            evaluator="llm_judge",
+            rubric_json="{not valid json!",
+            scorers=["exact_match"],
+        )
+
+        assert response.status_code == 422
+        body = response.body.decode("utf-8")
+        assert "Invalid JSON in custom rubric" in body
+
+    def test_new_eval_with_rubric_pushes_task(self, monkeypatch):
+        """Valid rubric JSON should be included in task inputs."""
+        pushed: list = []
+
+        class FakeRedis:
+            def lpush(self, queue, payload):
+                pushed.append(json.loads(payload))
+
+        monkeypatch.setattr(app_module, "get_redis", lambda: FakeRedis())
+
+        rubric = [{"key": "quality", "label": "Quality", "description": "Is it good?", "weight": 1.0, "required": True}]
+
+        response = app_module.dashboard_new_submit(
+            request=_make_request(),
+            description="Test with rubric",
+            task_type="eval.run",
+            model="anthropic:claude-sonnet-4-5-20250929",
+            dataset_path="datasets/test.jsonl",
+            evaluator="llm_judge",
+            judge_model="anthropic:claude-sonnet-4-5-20250929",
+            scorers=["exact_match"],
+            rubric_json=json.dumps(rubric),
+        )
+
+        assert len(pushed) == 1
+        task = pushed[0]
+        assert task["inputs"]["evaluator"] == "llm_judge"
+        assert task["inputs"]["rubric"] == rubric
+        assert task["inputs"]["judge_model"] == "anthropic:claude-sonnet-4-5-20250929"
+        assert response.status_code == 303

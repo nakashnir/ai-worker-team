@@ -8,7 +8,8 @@ RUN pip install --no-cache-dir \
     redis==5.0.8 \
     psycopg2-binary==2.9.9 \
     jinja2==3.1.4 \
-    aiofiles==23.2.1
+    aiofiles==23.2.1 \
+    python-multipart
 
 COPY schemas/ ./schemas/
 COPY orchestrator/app.py ./app.py

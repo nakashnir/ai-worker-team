@@ -49,8 +49,8 @@ from typing import Any, Dict, List, Optional
 import psycopg2
 import psycopg2.extras
 import redis as redis_lib
-from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse
+from fastapi import FastAPI, Form, HTTPException, Query, Request
+from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
@@ -863,6 +863,183 @@ def dashboard_compare(
             "nightly":     nightly,
         },
     )
+
+
+# ═════════════════════════════════════════════════════════════════
+# Sprint D — Dashboard productization (NEW; nothing above changed)
+# ═════════════════════════════════════════════════════════════════
+
+_KNOWN_SCORERS = ["exact_match", "contains_expected", "format_nonempty"]
+
+
+def _available_datasets() -> list[str]:
+    """List *.jsonl filenames from SHARED_DIR / 'datasets' that we can safely reference."""
+    ds_dir = SHARED_DIR / "datasets"
+    if not ds_dir.is_dir():
+        return []
+    return sorted(f.name for f in ds_dir.glob("*.jsonl") if f.is_file())
+
+
+@app.get("/dashboard/connect", response_class=HTMLResponse, tags=["dashboard"])
+def dashboard_connect(request: Request):
+    """Product-facing docs: how companies connect to EvalOps."""
+    return templates.TemplateResponse(
+        "connect.html",
+        {
+            "request":   request,
+            "datasets":  _available_datasets(),
+            "nightly":   _last_nightly_summary(),
+        },
+    )
+
+
+@app.get("/dashboard/new", response_class=HTMLResponse, tags=["dashboard"])
+def dashboard_new(request: Request):
+    """Form to create a new evaluation task."""
+    return templates.TemplateResponse(
+        "new_eval.html",
+        {
+            "request":           request,
+            "datasets":          _available_datasets(),
+            "models":            _distinct_models(),
+            "available_scorers": _KNOWN_SCORERS,
+            "form":              None,
+            "error":             None,
+            "nightly":           _last_nightly_summary(),
+        },
+    )
+
+
+@app.post("/dashboard/new", tags=["dashboard"])
+def dashboard_new_submit(
+    request:      Request,
+    description:  Optional[str] = Form(default=None),
+    task_type:    str           = Form(default="eval.run"),
+    model:        Optional[str] = Form(default=None),
+    dataset_path: Optional[str] = Form(default=None),
+    evaluator:    str           = Form(default="deterministic"),
+    judge_model:  Optional[str] = Form(default=None),
+    scorers:      Optional[List[str]] = Form(default=None),
+    rubric_json:  Optional[str] = Form(default=None),
+):
+    """
+    Form handler: builds the same Task shape used by submit_task
+    and pushes it directly to the Redis queue (no HTTP round-trip).
+    """
+    # ── Validate minimum fields ──────────────────────────────────
+    if not description or not description.strip():
+        return HTMLResponse(
+            content=templates.TemplateResponse(
+                "new_eval.html",
+                {
+                    "request":           request,
+                    "datasets":          _available_datasets(),
+                    "models":            _distinct_models(),
+                    "available_scorers": _KNOWN_SCORERS,
+                    "form": {
+                        "description": description,
+                        "task_type": task_type,
+                        "model": model,
+                        "dataset_path": dataset_path,
+                        "evaluator": evaluator,
+                        "judge_model": judge_model,
+                        "scorers": scorers,
+                        "rubric_json": rubric_json,
+                    },
+                    "error": "Description is required.",
+                    "nightly": _last_nightly_summary(),
+                },
+            ).body,
+            status_code=422,
+        )
+
+    if not dataset_path:
+        return HTMLResponse(
+            content=templates.TemplateResponse(
+                "new_eval.html",
+                {
+                    "request":           request,
+                    "datasets":          _available_datasets(),
+                    "models":            _distinct_models(),
+                    "available_scorers": _KNOWN_SCORERS,
+                    "form": {
+                        "description": description,
+                        "task_type": task_type,
+                        "model": model,
+                        "dataset_path": dataset_path,
+                        "evaluator": evaluator,
+                        "judge_model": judge_model,
+                        "scorers": scorers,
+                        "rubric_json": rubric_json,
+                    },
+                    "error": "Dataset path is required.",
+                    "nightly": _last_nightly_summary(),
+                },
+            ).body,
+            status_code=422,
+        )
+
+    # Default scorers
+    if scorers is None:
+        scorers = list(_KNOWN_SCORERS)
+
+    # Parse rubric if provided
+    rubric: Optional[list] = None
+    if rubric_json and rubric_json.strip():
+        try:
+            rubric = json.loads(rubric_json)
+        except json.JSONDecodeError:
+            return HTMLResponse(
+                content=templates.TemplateResponse(
+                    "new_eval.html",
+                    {
+                        "request":           request,
+                        "datasets":          _available_datasets(),
+                        "models":            _distinct_models(),
+                        "available_scorers": _KNOWN_SCORERS,
+                        "form": {
+                            "description": description,
+                            "task_type": task_type,
+                            "model": model,
+                            "dataset_path": dataset_path,
+                            "evaluator": evaluator,
+                            "judge_model": judge_model,
+                            "scorers": scorers,
+                            "rubric_json": rubric_json,
+                        },
+                        "error": "Invalid JSON in custom rubric.",
+                        "nightly": _last_nightly_summary(),
+                    },
+                ).body,
+                status_code=422,
+            )
+
+    # ── Build inputs dict (same shape submit_task expects) ──────
+    inputs: Dict[str, Any] = {
+        "dataset_path": dataset_path,
+    }
+    if model:
+        inputs["model"] = model
+    inputs["scorers"] = scorers
+    if evaluator == "llm_judge":
+        inputs["evaluator"] = "llm_judge"
+        if judge_model:
+            inputs["judge_model"] = judge_model
+        if rubric:
+            inputs["rubric"] = rubric
+
+    # ── Construct Task and push to Redis ─────────────────────────
+    task = Task(
+        task_id     = str(uuid.uuid4()),
+        description = description.strip(),
+        task_type   = task_type,
+        inputs      = inputs,
+        created_at  = _now_iso(),
+        status      = TaskStatus.queued,
+    )
+    get_redis().lpush(TASK_QUEUE, task.model_dump_json())
+
+    return RedirectResponse(url="/dashboard", status_code=303)
 
 
 # ─────────────────────────────────────────────────────────────────

@@ -1,0 +1,192 @@
+{% extends "base.html" %}
+{% block title %}Connect — EvalOps{% endblock %}
+
+{% block content %}
+
+{# ── Breadcrumb ── #}
+<nav class="breadcrumb">
+  <a href="/dashboard">Runs</a>
+  <span class="sep">›</span>
+  <span class="current">Connect</span>
+</nav>
+
+{# ── Title ── #}
+<div class="page-header" style="margin-bottom:1.75rem;">
+  <div class="page-title-group">
+    <h1>How to Connect</h1>
+    <p class="active-filters-note" style="margin-top:.5rem;">
+      EvalOps runs evaluation tasks against LLM models, stores results in PostgreSQL,
+      and surfaces them through this dashboard.
+      Submit tasks via the REST API or use the <a href="/dashboard/new">form in this UI</a>.
+    </p>
+  </div>
+</div>
+
+{# ── Connection info ── #}
+<section class="meta-section" style="margin-bottom:1.5rem;">
+  <div class="section-heading">
+    <h2>System Endpoints</h2>
+    <div class="section-heading-line"></div>
+  </div>
+  <table class="meta-table">
+    <tbody>
+      <tr><th>Orchestrator</th><td><code>http://&lt;host&gt;:8080</code></td></tr>
+      <tr><th>Task Submit</th><td><code>POST /task/submit</code> (JSON)</td></tr>
+      <tr><th>Task Status</th><td><code>GET /task/status/{task_id}</code></td></tr>
+      <tr><th>List Runs</th><td><code>GET /eval/runs</code> (paginated)</td></tr>
+      <tr><th>Single Run</th><td><code>GET /eval/run/{task_id}</code></td></tr>
+      <tr><th>Samples</th><td><code>GET /eval/run/{task_id}/samples</code> (paginated, searchable)</td></tr>
+      <tr><th>Dashboard</th><td><code>GET /dashboard</code></td></tr>
+      <tr><th>API Docs</th><td><a href="/docs">Swagger UI ↗</a></td></tr>
+    </tbody>
+  </table>
+</section>
+
+{# ── What the system does ── #}
+<section class="meta-section" style="margin-bottom:1.5rem;">
+  <div class="section-heading">
+    <h2>What EvalOps Supports</h2>
+    <div class="section-heading-line"></div>
+  </div>
+  <div class="table-wrap" style="padding:1.25rem 1.5rem;">
+    <ul style="list-style:disc;padding-left:1.25rem;color:var(--text-muted);line-height:2;">
+      <li><strong style="color:var(--text)">Task queue architecture</strong> — Submit tasks via API; workers poll Redis and execute asynchronously</li>
+      <li><strong style="color:var(--text)">Multi-provider LLM evaluation</strong> — Anthropic Claude (primary) and OpenAI (fallback) with retry logic</li>
+      <li><strong style="color:var(--text)">Deterministic scorers</strong> — exact_match, contains_expected, format_nonempty</li>
+      <li><strong style="color:var(--text)">LLM-as-judge</strong> — Rubric-structured judge evaluator with failure taxonomy classification</li>
+      <li><strong style="color:var(--text)">Persistent storage</strong> — Run-level and sample-level results stored in PostgreSQL</li>
+      <li><strong style="color:var(--text)">Nightly regression checks</strong> — GitHub Actions workflow with baseline comparison and webhook alerts</li>
+      <li><strong style="color:var(--text)">Read-only dashboard</strong> — Browse, search, compare evaluation runs</li>
+    </ul>
+  </div>
+</section>
+
+{# ── Step-by-step ── #}
+<section class="meta-section" style="margin-bottom:1.5rem;">
+  <div class="section-heading">
+    <h2>Quick Start</h2>
+    <div class="section-heading-line"></div>
+  </div>
+  <div class="table-wrap" style="padding:1.25rem 1.5rem;">
+    <p style="margin-bottom:1rem;color:var(--text-muted);">
+      <strong style="color:var(--text);">Step 1:</strong> Prepare a JSONL dataset file in <code>shared/datasets/</code>.<br>
+      <strong style="color:var(--text);">Step 2:</strong> Submit an <code>eval.run</code> task with your model, scorers, and dataset path.<br>
+      <strong style="color:var(--text);">Step 3:</strong> Poll <code>GET /task/status/{task_id}</code> until status is <code>done</code>.<br>
+      <strong style="color:var(--text);">Step 4:</strong> View results in the dashboard at <code>/dashboard</code> or via API.
+    </p>
+    <a href="/dashboard/new" class="btn btn-primary">Create an Evaluation →</a>
+  </div>
+</section>
+
+{# ── Code examples ── #}
+<section class="meta-section" style="margin-bottom:1.5rem;">
+  <div class="section-heading">
+    <h2>Example: Dataset Row</h2>
+    <div class="section-heading-line"></div>
+  </div>
+  <div class="table-wrap" style="padding:1rem 1.25rem;">
+    <pre style="margin:0;white-space:pre-wrap;overflow-x:auto;font-size:.78rem;line-height:1.6;color:var(--text-muted);">{"id": "s001", "prompt": "What is 2+2?", "expected": "4", "metadata": {"category": "math"}}</pre>
+  </div>
+</section>
+
+<section class="meta-section" style="margin-bottom:1.5rem;">
+  <div class="section-heading">
+    <h2>Example: Eval Task Payload</h2>
+    <div class="section-heading-line"></div>
+  </div>
+  <div class="table-wrap" style="padding:1rem 1.25rem;">
+    <pre style="margin:0;white-space:pre-wrap;overflow-x:auto;font-size:.78rem;line-height:1.6;color:var(--text-muted);">{
+  "description": "Nightly regression eval",
+  "task_type": "eval.run",
+  "inputs": {
+    "dataset_path": "datasets/nightly_eval_curated_v1.jsonl",
+    "model": "anthropic:claude-sonnet-4-5-20250929",
+    "scorers": ["exact_match", "contains_expected", "format_nonempty"]
+  }
+}</pre>
+  </div>
+</section>
+
+<section class="meta-section" style="margin-bottom:1.5rem;">
+  <div class="section-heading">
+    <h2>Example: Eval with LLM Judge + Rubric (optional)</h2>
+    <div class="section-heading-line"></div>
+  </div>
+  <div class="table-wrap" style="padding:1rem 1.25rem;">
+    <pre style="margin:0;white-space:pre-wrap;overflow-x:auto;font-size:.78rem;line-height:1.6;color:var(--text-muted);">{
+  "description": "Quality evaluation with judge",
+  "task_type": "eval.run",
+  "inputs": {
+    "dataset_path": "datasets/nightly_eval_curated_v1.jsonl",
+    "model": "anthropic:claude-sonnet-4-5-20250929",
+    "scorers": ["exact_match"],
+    "evaluator": "llm_judge",
+    "rubric": [
+      {
+        "key": "answer_quality",
+        "label": "Answer Quality",
+        "description": "Does the response answer the question accurately?",
+        "weight": 2.0,
+        "required": true
+      }
+    ]
+  }
+}</pre>
+  </div>
+</section>
+
+<section class="meta-section" style="margin-bottom:1.5rem;">
+  <div class="section-heading">
+    <h2>Example: Using curl</h2>
+    <div class="section-heading-line"></div>
+  </div>
+  <div class="table-wrap" style="padding:1rem 1.25rem;">
+    <pre style="margin:0;white-space:pre-wrap;overflow-x:auto;font-size:.78rem;line-height:1.6;color:var(--text-muted);"># Submit task
+curl -sf -X POST http://127.0.0.1:8080/task/submit \
+  -H "Content-Type: application/json" \
+  -d '{"description":"My eval","task_type":"eval.run","inputs":{"dataset_path":"datasets/nightly_eval_curated_v1.jsonl","model":"anthropic:claude-sonnet-4-5-20250929","scorers":["exact_match"]}}'
+
+# Poll status (replace TASK_ID from response above)
+curl -sf http://127.0.0.1:8080/task/status/TASK_ID
+
+# Fetch results
+curl -sf http://127.0.0.1:8080/eval/run/TASK_ID</pre>
+  </div>
+</section>
+
+{# ── Available datasets ── #}
+{% if datasets and datasets|length > 0 %}
+<section class="meta-section" style="margin-bottom:1.5rem;">
+  <div class="section-heading">
+    <h2>Available Datasets</h2>
+    <div class="section-heading-line"></div>
+  </div>
+  <div class="table-wrap" style="padding:.75rem 1.25rem;">
+    <table class="data-table">
+      <thead><tr><th>Dataset File</th><th>Use in <code>dataset_path</code></th></tr></thead>
+      <tbody>
+        {% for ds in datasets %}
+        <tr>
+          <td><code>{{ ds }}</code></td>
+          <td><code>datasets/{{ ds }}</code></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endif %}
+
+<section class="meta-section" style="margin-bottom:1.5rem;">
+  <div class="section-heading">
+    <h2>Actions</h2>
+    <div class="section-heading-line"></div>
+  </div>
+  <div style="display:flex;gap:.5rem;flex-wrap:wrap;">
+    <a href="/dashboard/new" class="btn btn-primary">Create an Evaluation →</a>
+    <a href="/docs" class="btn btn-secondary" target="_blank">API Docs (Swagger) ↗</a>
+    <a href="/dashboard" class="btn btn-secondary">Browse Runs</a>
+  </div>
+</section>
+
+{% endblock %}
