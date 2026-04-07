@@ -1073,6 +1073,102 @@ def dashboard_new_submit(
     return RedirectResponse(url="/dashboard", status_code=303)
 
 
+# ═════════════════════════════════════════════════════════════════
+# Sprint F — Dataset registration (NEW; nothing above changed)
+# ═════════════════════════════════════════════════════════════════
+
+_JSONL_MAX_LINES = 5_000
+_JSONL_MAX_BYTES = 2 * 1024 * 1024  # 2 MB
+
+
+def _validate_jsonl_content(content: str) -> list[str] | None:
+    """Validate pasted JSONL content. Returns list of error strings, or None if valid."""
+    errors: list[str] = []
+    lines = [ln for ln in content.strip().splitlines() if ln.strip()]
+    if not lines:
+        return ["Content is empty."]
+    if len(lines) > _JSONL_MAX_LINES:
+        return [f"Dataset exceeds {_JSONL_MAX_LINES} lines."]
+    required_keys = {"id", "prompt", "expected"}
+    for i, line in enumerate(lines, 1):
+        try:
+            obj = json.loads(line)
+        except json.JSONDecodeError:
+            errors.append(f"Line {i}: invalid JSON.")
+            if len(errors) >= 5:
+                errors.append("... additional errors omitted.")
+                break
+            continue
+        missing = required_keys - set(obj.keys())
+        if missing:
+            errors.append(f"Line {i}: missing keys {sorted(missing)}.")
+    return errors if errors else None
+
+
+@app.get("/dashboard/register", response_class=HTMLResponse, tags=["dashboard"])
+def dashboard_register(request: Request):
+    """Form to register a new dataset by pasting JSONL content."""
+    return templates.TemplateResponse(
+        "register_dataset.html",
+        {
+            "request": request,
+            "error": None,
+            "form": None,
+            "nightly": _last_nightly_summary(),
+        },
+    )
+
+
+@app.post("/dashboard/register", tags=["dashboard"])
+def dashboard_register_submit(
+    request: Request,
+    name: Optional[str] = Form(default=None),
+    content: Optional[str] = Form(default=None),
+):
+    """Handle dataset registration: validate and save JSONL to SHARED_DIR/datasets/."""
+    name = (name or "").strip()
+    content = (content or "").strip()
+
+    def _error(msg: str):
+        return HTMLResponse(
+            content=templates.TemplateResponse(
+                "register_dataset.html",
+                {
+                    "request": request,
+                    "error": msg,
+                    "form": {"name": name, "content": content},
+                    "nightly": _last_nightly_summary(),
+                },
+            ).body,
+            status_code=422,
+        )
+
+    # Validate name
+    if not name:
+        return _error("Dataset name is required.")
+    if not name.endswith(".jsonl"):
+        name += ".jsonl"
+    # Path traversal / unsafe filename guard
+    if "/" in name or "\\" in name or ".." in name or not name.replace(".jsonl", "").replace("-", "").replace("_", "").replace(" ", "").isalnum():
+        return _error("Invalid dataset name. Use only letters, numbers, hyphens, and underscores.")
+    # Duplicate guard
+    if name in _available_datasets():
+        return _error(f"A dataset named '{name}' already exists. Choose a different name.")
+    # Validate content
+    if not content:
+        return _error("Dataset content is required.")
+    if len(content.encode("utf-8")) > _JSONL_MAX_BYTES:
+        return _error(f"Content exceeds {_JSONL_MAX_BYTES // (1024*1024)} MB.")
+    errs = _validate_jsonl_content(content)
+    if errs:
+        return _error("<br>".join(errs))
+    # Write to disk
+    ds_dir = SHARED_DIR / "datasets"
+    ds_dir.mkdir(parents=True, exist_ok=True)
+    (ds_dir / name).write_text(content.strip() + "\n", encoding="utf-8")
+    return RedirectResponse(url="/dashboard/new", status_code=303)
+
+
 # ─────────────────────────────────────────────────────────────────
 # Entry point
 # ─────────────────────────────────────────────────────────────────

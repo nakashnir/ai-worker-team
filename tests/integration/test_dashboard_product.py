@@ -10,7 +10,7 @@ Tests:
 """
 
 import json
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, patch, mock_open
 
 import pytest
 from starlette.requests import Request
@@ -358,3 +358,121 @@ class TestNewEvalFormSubmission:
         assert response.status_code == 303
         assert len(pushed) == 1
         assert pushed[0]["inputs"]["dataset_path"] == "test.jsonl"
+
+
+class TestDatasetRegistration:
+    """Tests for Sprint F: GET/POST /dashboard/register."""
+
+    VALID_LINE = '{"id":"x","prompt":"hello","expected":"hello"}'
+
+    def test_register_page_returns_200(self, monkeypatch):
+        """GET /dashboard/register should render the registration form."""
+        monkeypatch.setattr(app_module, "_last_nightly_summary", lambda: {"available": False})
+        request = _make_request()
+        response = app_module.dashboard_register(request=request)
+        assert response.status_code == 200
+        body = response.body.decode("utf-8")
+        assert "Register Dataset" in body
+
+    def test_register_empty_name_returns_422(self, monkeypatch):
+        """Empty dataset name should return 422."""
+        monkeypatch.setattr(app_module, "_last_nightly_summary", lambda: {"available": False})
+        response = app_module.dashboard_register_submit(
+            _make_request(), name="", content=self.VALID_LINE
+        )
+        assert response.status_code == 422
+        body = response.body.decode("utf-8")
+        assert "name is required" in body
+
+    def test_register_duplicate_returns_422(self, monkeypatch):
+        """Duplicate dataset name should return 422."""
+        monkeypatch.setattr(app_module, "_available_datasets", lambda: ["dup.jsonl"])
+        monkeypatch.setattr(app_module, "_last_nightly_summary", lambda: {"available": False})
+        response = app_module.dashboard_register_submit(
+            _make_request(), name="dup", content=self.VALID_LINE
+        )
+        assert response.status_code == 422
+        body = response.body.decode("utf-8")
+        assert "already exists" in body
+
+    def test_register_invalid_jsonl_returns_422(self, monkeypatch):
+        """Invalid JSONL content should return 422."""
+        monkeypatch.setattr(app_module, "_last_nightly_summary", lambda: {"available": False})
+        response = app_module.dashboard_register_submit(
+            _make_request(), name="new.jsonl", content="not-json\n{\"id\":\"x\",\"prompt\":\"p\"}"
+        )
+        assert response.status_code == 422
+        body = response.body.decode("utf-8")
+        assert "invalid JSON" in body
+
+    def test_register_missing_required_keys_returns_422(self, monkeypatch):
+        """JSONL missing required keys should return 422."""
+        monkeypatch.setattr(app_module, "_last_nightly_summary", lambda: {"available": False})
+        response = app_module.dashboard_register_submit(
+            _make_request(), name="new.jsonl", content='{"id":"x","prompt":"p"}'
+        )
+        assert response.status_code == 422
+        body = response.body.decode("utf-8")
+        assert "missing keys" in body
+
+    def test_register_path_traversal_returns_422(self, monkeypatch):
+        """Path traversal in filename should be rejected."""
+        monkeypatch.setattr(app_module, "_last_nightly_summary", lambda: {"available": False})
+        response = app_module.dashboard_register_submit(
+            _make_request(), name="../../../etc/passwd.jsonl", content=self.VALID_LINE
+        )
+        assert response.status_code == 422
+        body = response.body.decode("utf-8")
+        assert "Invalid dataset name" in body
+
+    def test_register_backslash_in_name_returns_422(self, monkeypatch):
+        """Backslash in filename should be rejected."""
+        monkeypatch.setattr(app_module, "_last_nightly_summary", lambda: {"available": False})
+        response = app_module.dashboard_register_submit(
+            _make_request(), name="foo\\bar.jsonl", content=self.VALID_LINE
+        )
+        assert response.status_code == 422
+
+    def test_register_empty_content_returns_422(self, monkeypatch):
+        """Empty dataset content should return 422."""
+        monkeypatch.setattr(app_module, "_last_nightly_summary", lambda: {"available": False})
+        response = app_module.dashboard_register_submit(
+            _make_request(), name="empty.jsonl", content=""
+        )
+        assert response.status_code == 422
+        body = response.body.decode("utf-8")
+        assert "required" in body
+
+    def test_register_valid_jsonl_saves_and_redirects(self, monkeypatch, tmp_path):
+        """Valid JSONL should be written to SHARED_DIR/datasets/ and redirect to /dashboard/new."""
+        ds_dir = tmp_path / "datasets"
+        ds_dir.mkdir()
+        monkeypatch.setattr(app_module, "SHARED_DIR", tmp_path)
+        monkeypatch.setattr(app_module, "_last_nightly_summary", lambda: {"available": False})
+        content = '{"id":"a","prompt":"hi","expected":"there"}\n{"id":"b","prompt":"yo","expected":"ya"}'
+
+        response = app_module.dashboard_register_submit(
+            _make_request(), name="newtest.jsonl", content=content
+        )
+
+        assert response.status_code == 303
+        assert response.headers["location"] == "/dashboard/new"
+        saved = (ds_dir / "newtest.jsonl").read_text()
+        assert "a" in saved
+        assert "b" in saved
+        assert saved.endswith("\n")
+
+    def test_register_auto_append_jsonl_extension(self, monkeypatch, tmp_path):
+        """Should auto-append .jsonl if the user omits it."""
+        ds_dir = tmp_path / "datasets"
+        ds_dir.mkdir()
+        monkeypatch.setattr(app_module, "SHARED_DIR", tmp_path)
+        monkeypatch.setattr(app_module, "_last_nightly_summary", lambda: {"available": False})
+
+        response = app_module.dashboard_register_submit(
+            _make_request(), name="auto_test", content=self.VALID_LINE
+        )
+
+        assert response.status_code == 303
+        saved = (ds_dir / "auto_test.jsonl").read_text()
+        assert "x" in saved
